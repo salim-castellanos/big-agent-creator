@@ -19,7 +19,7 @@ Dropping a card does not connect it. You draw the arrow. The number on a card is
 
 The model is the Cursor API (`CURSOR_API_KEY`). This Docker image cannot run the SDK sandbox, so the generator leaves that switch off.
 
-## This release, 0.2.0
+## This release, 0.2.1
 
 | | |
 | --- | --- |
@@ -29,11 +29,11 @@ The model is the Cursor API (`CURSOR_API_KEY`). This Docker image cannot run the
 | Connect | Open a Cloudflare tunnel and register the Telegram webhook. The bot token is not shown. |
 | Ship | Start, stop, rebuild, logs, and the playground link. |
 
-Kubernetes, AWS, GCP, and Azure are the same image later: each cloud only starts it and injects the same secret names. 0.2.0 does not deploy there yet. The next step after that is a versioned image: build once, keep the digest, deploy that digest instead of an unnamed rebuild. The line is `ROADMAP.md` in the repository root. There is no second model runner.
+Kubernetes, AWS, GCP, and Azure are the same image later: each cloud only starts it and injects the same secret names. 0.2.1 does not deploy there yet. The next step after that is a versioned image: build once, keep the digest, deploy that digest instead of an unnamed rebuild. The line is `ROADMAP.md` in the repository root. There is no second model runner.
 
 ## Start
 
-1. Install the extension and open the agent folder. In this repo, start with `examples/telegram-desk`.
+1. Install the extension and open a folder. Use **Examples** and load **Telegram desk**, or open `examples/telegram-desk` yourself. The first load keeps your current files in `.keep/original`. **Restore my folder** puts them back.
 2. Open **BigAgentCreator** on the activity bar.
 3. Initialize the workspace if the folder has no agent files yet. Agent and Limits appear. Either can be removed.
 4. In **Secrets**, set `CURSOR_API_KEY`. For Telegram also set `TELEGRAM_BOT_TOKEN` (the BotFather value, with the colon) and `TELEGRAM_WEBHOOK_SECRET` (letters, numbers, `_`, and `-` only).

@@ -107,6 +107,47 @@ export function slug(value: string): string {
   return cleaned;
 }
 
+export const GUIDE_URL = "https://github.com/salim-castellanos/big-agent-creator/blob/main/docs/start.md";
+export const GUIDE_URL_ES = "https://github.com/salim-castellanos/big-agent-creator/blob/main/docs/start.es.md";
+
+function writeStartFiles(root: string): void {
+  const start = path.join(root, "START.md");
+  if (!fs.existsSync(start)) {
+    fs.writeFileSync(
+      start,
+      `# Start here
+
+1. Open BigAgentCreator from the activity bar.
+2. Hello world: Examples, then Hello. Or stay here. The Agent card is the prompt.
+3. Secrets: set CURSOR_API_KEY.
+4. Ship, Start. Open http://127.0.0.1:3000/playground and type hi.
+5. To edit, select a card. The panel on the right is that card. Save.
+6. A trigger calls the model only when its arrow reaches Agent.
+7. Help, in the canvas header, is this same path. English | Español changes the labels only.
+
+Guide: ${GUIDE_URL}
+Español: ${GUIDE_URL_ES}
+`,
+      "utf8",
+    );
+  }
+  const agents = path.join(root, "AGENTS.md");
+  if (!fs.existsSync(agents)) {
+    fs.writeFileSync(
+      agents,
+      `# This folder
+
+An agent folder made with BigAgentCreator. Before editing, read START.md in this folder and the guide:
+
+${GUIDE_URL}
+
+One bot/agent.ts. Secret values stay in .env, never in the Dockerfile, and never in the chat.
+`,
+      "utf8",
+    );
+  }
+}
+
 export function initWorkspace(root: string, name: string): Project {
   slug(name);
   fs.mkdirSync(path.join(root, "tools"), { recursive: true });
@@ -134,6 +175,7 @@ export function initWorkspace(root: string, name: string): Project {
   const ignore = path.join(root, ".gitignore");
   const prev = fs.existsSync(ignore) ? fs.readFileSync(ignore, "utf8") : "";
   if (!prev.includes(".env")) fs.writeFileSync(ignore, `${prev}\n.env\n`.trim() + "\n", "utf8");
+  writeStartFiles(root);
   writeDocker(root, false);
   emitSdk(root);
   return loadProject(root);
@@ -601,6 +643,126 @@ export function setSecret(root: string, name: string, value: string): void {
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
   fs.writeFileSync(path.join(root, ".env"), `${body}\n`, "utf8");
+}
+
+export type ExampleInfo = { id: string; title: string; summary: string; level: string };
+
+export const EXAMPLES: ExampleInfo[] = [
+  {
+    id: "hello",
+    title: "Hello",
+    summary: "Type hi in the playground and get hello. No Telegram. This is the first run.",
+    level: "Hello",
+  },
+  {
+    id: "telegram-desk",
+    title: "Telegram desk",
+    summary: "One chat in, one answer back. Hours, and a refusal for refunds. The deploy that was tried end to end.",
+    level: "Next",
+  },
+  {
+    id: "support-desk",
+    title: "Support desk",
+    summary: "An inbox webhook and a Monday schedule. Lookup, then a case, then a person. The image starts; the knowledge servers are not in this compose file.",
+    level: "Bigger",
+  },
+  {
+    id: "change-gate",
+    title: "Change gate",
+    summary: "A pull request review across the canvas. Telegram is the path you can talk to. The other entries are the tour.",
+    level: "Full canvas",
+  },
+];
+
+const SKIP_ALWAYS = new Set(["node_modules", ".git", ".keep"]);
+
+export function keepPath(root: string): string {
+  return path.join(root, ".keep", "original");
+}
+
+export function workspaceKept(root: string): boolean {
+  return fs.existsSync(keepPath(root));
+}
+
+/** First save only. Loading an example will not replace this copy. */
+export function keepWorkspace(root: string): { dir: string; fresh: boolean } {
+  const dir = keepPath(root);
+  if (fs.existsSync(dir)) return { dir, fresh: false };
+  copyTree(root, dir, SKIP_ALWAYS);
+  return { dir, fresh: true };
+}
+
+export function restoreWorkspace(root: string): void {
+  const dir = keepPath(root);
+  if (!fs.existsSync(dir)) throw new Error("Nothing is kept yet. Keep this folder before loading an example.");
+  const saved = new Set(relativeFiles(dir));
+  removeUnsaved(root, saved);
+  copyTree(dir, root, SKIP_ALWAYS);
+}
+
+export function loadExample(source: string, dest: string): { files: number; keptEnv: boolean; keptFresh: boolean } {
+  if (!fs.existsSync(source)) throw new Error("That example is not in this extension.");
+  const kept = keepWorkspace(dest);
+  const keptEnv = fs.existsSync(path.join(dest, ".env"));
+  clearExceptKept(dest);
+  const files = copyTree(source, dest, new Set([...SKIP_ALWAYS, ".env"]));
+  if (isProject(dest)) {
+    writeDocker(dest, true);
+    emitSdk(dest);
+  }
+  return { files, keptEnv, keptFresh: kept.fresh };
+}
+
+function copyTree(source: string, dest: string, skip: Set<string>): number {
+  let count = 0;
+  const walk = (from: string, to: string) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue;
+      const src = path.join(from, entry.name);
+      const dst = path.join(to, entry.name);
+      if (entry.isDirectory()) walk(src, dst);
+      else {
+        fs.copyFileSync(src, dst);
+        count += 1;
+      }
+    }
+  };
+  walk(source, dest);
+  return count;
+}
+
+function relativeFiles(dir: string, base = dir, out: string[] = []): string[] {
+  if (!fs.existsSync(dir)) return out;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP_ALWAYS.has(entry.name)) continue;
+    const abs = path.join(dir, entry.name);
+    const rel = path.relative(base, abs);
+    if (entry.isDirectory()) relativeFiles(abs, base, out);
+    else out.push(rel);
+  }
+  return out;
+}
+
+function clearExceptKept(root: string): void {
+  if (!fs.existsSync(root)) return;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (SKIP_ALWAYS.has(entry.name) || entry.name === ".env") continue;
+    fs.rmSync(path.join(root, entry.name), { recursive: true, force: true });
+  }
+}
+
+function removeUnsaved(root: string, saved: Set<string>): void {
+  const drop = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (SKIP_ALWAYS.has(entry.name)) continue;
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) drop(abs);
+      else if (!saved.has(path.relative(root, abs))) fs.rmSync(abs, { force: true });
+    }
+  };
+  drop(root);
 }
 
 export function writeDocker(root: string, force = true): void {

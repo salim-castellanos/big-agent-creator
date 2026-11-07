@@ -1,9 +1,9 @@
 {
   "name": "bigagentcreator",
   "displayName": "BigAgentCreator",
-  "description": "Design an AI agent workflow on a canvas and save it as a folder. Triggers, tools, Telegram, and local Docker. Open the playground. Skip the agent and the path answers in code, with no model call.",
-  "version": "0.2.0",
-  "publisher": "SalimCastellanos",
+  "description": "Design an AI agent workflow on a canvas and save it as a folder. Triggers, tools, and Telegram. Manage environments and deploy the same image with Docker locally, or straight to AWS, GCP, and Azure. Skip the agent and the path answers in code.",
+  "version": "0.2.6",
+  "publisher": "BigAgentCreator",
   "repository": {
     "type": "git",
     "url": "https://github.com/salim-castellanos/big-agent-creator.git",
@@ -24,15 +24,17 @@
     },
     "views": {
       "bigagent": [
-        { "type": "webview", "id": "bigagent.home", "name": "Designer" }
+        { "type": "webview", "id": "bigagent.home", "name": "%view.designer%" }
       ]
     },
     "commands": [
-      { "command": "bigagent.open", "title": "BigAgentCreator: Open designer" }
+      { "command": "bigagent.open", "title": "%command.open%" }
     ]
   },
   "scripts": {
-    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "sync-examples": "node scripts/sync-examples.mjs",
+    "compile": "node scripts/sync-examples.mjs && esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "vscode:prepublish": "npm run compile",
     "test": "tsx --test src/project.test.ts"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import { defineArtifacts } from "@grok/agent-sdk/artifacts";
 
 export default defineArtifacts({

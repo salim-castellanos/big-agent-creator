@@ -2,7 +2,9 @@
 
 The small support agent used to learn the deploy. One chat in, one answer back. No other services.
 
-Open this folder, then BigAgentCreator. The flow is Telegram, then Limits, then Think. Hand-off loads only when the person asks for a payment, a deletion, or a person.
+Open this folder, then BigAgentCreator. Or, from any folder, open **Examples** and load **Telegram desk**. That keeps your current files in `.keep/original` the first time. **Restore my folder** puts them back.
+
+The flow is Telegram, then Limits, then Agent. Hand-off loads only when the person asks for a payment, a deletion, or a person.
 
 ## Run it
 

@@ -1,8 +1,8 @@
 # BigAgentCreator — contexto
 
-Iniciativa del mismo ecosistema que BigSwarmAI. Vive en `ecosystem/big-agent-creator/`, con su propio git cuando se abra. No entra al repo del molde ni al de `ecosystem/bigswarmai/`.
+Iniciativa del mismo ecosistema que BigSwarmAI. Vive en `ecosystem/big-agent-creator/`, con git en `https://github.com/salim-castellanos/big-agent-creator`. No entra al repo del molde ni al de `ecosystem/bigswarmai/`. Qué hace la carpeta hoy está en `docs/linea-base.md`.
 
-Todavía no hay épicas ni HUs. Este archivo fija cómo se construye y el primer corte.
+Este archivo fija cómo se construye. No hay épicas ni HUs: es deuda, no un modo de trabajo. El comportamiento ya escrito en `apps/` se hizo desde el chat. El siguiente cambio abre una HU y un runbook antes de tocar código. El mapa está en `docs/05-backlog/catalog.md` y la cola en `STATUS.md`.
 
 ## Qué es
 
@@ -17,6 +17,10 @@ Una plataforma para que un ingeniero o un FDE diseñe un agente o un flujo, lo v
 | `channels/` | Dónde escucha y responde. |
 
 El dibujo y el chat escriben esa carpeta. El explorador la muestra. El grafo es una vista, no el producto.
+
+## Idioma y ayuda
+
+**Diseño** abre el menú. **English | Español** y **Ayuda** quedan al final. El idioma cambia rótulos, avisos y la ayuda. No cambia archivos, identificadores, ni lo que el generador escribe. Ayuda explica cómo arrancar Hello, por qué `CURSOR_API_KEY` existe (el Agent SDK llama al modelo de Cursor con esa clave) y qué escribe el lienzo para que el SDK pueda cargarlo. La guía larga está en `docs/start.md` y `docs/start.es.md`.
 
 ## Qué se considera hecho
 
@@ -109,4 +113,4 @@ Prácticas de este tipo de agente:
 
 ## Fuera de este corte
 
-Épicas, HUs, AWS, GCP, Azure, Kubernetes y un ejecutor de modelo distinto al API de Cursor.
+AWS, GCP, Azure, Kubernetes y un ejecutor de modelo distinto al API de Cursor. Las épicas y las HUs no están fuera: el siguiente cambio las abre. El chat del editor todavía no tiene herramientas de esta extensión.

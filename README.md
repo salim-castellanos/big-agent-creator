@@ -4,7 +4,7 @@
 
 An extension for VS Code and Cursor. You design an AI agent as a workflow on a canvas and save it as a folder: triggers, limits, tools, guides, and a Telegram chat. You run that folder in Docker and try it in the playground. A path that never reaches the Agent card answers in code and does not call a model. Secret values stay in `.env`.
 
-The first Marketplace release is **0.2.0**. The extension is `apps/extension`. The page people read in the store is `apps/extension/README.md`. The one-line search text is the `description` in `apps/extension/package.json`.
+The first Marketplace release is **0.2.0**. The extension is `apps/extension`. The page people read in the store is `apps/extension/README.md`. The one-line search text is the `description` in `apps/extension/package.json`. The path from an empty folder to a playground reply is [Start](./docs/start.md).
 
 ## What you can do
 
@@ -23,7 +23,8 @@ A trigger that does not reach Agent answers in code and does not call the model.
 
 | Folder | Use |
 | --- | --- |
-| `examples/telegram-desk` | One Telegram chat. The first deploy to learn. |
+| `examples/hello` | Playground only. Type hi, get hello. |
+| `examples/telegram-desk` | One Telegram chat. Load it from **Examples**. The first deploy to learn. |
 | `examples/support-desk` | A desk with a knowledge base. |
 | `examples/change-gate` | A tour of the pieces on the canvas. |
 
@@ -43,12 +44,12 @@ Install the `.vsix` from the editor, or publish it.
 
 ## Publish to the Marketplace
 
-The publisher id in `package.json` is `SalimCastellanos`. You need a Marketplace publisher with that id and a personal access token.
+The publisher id in `package.json` is `BigAgentCreator`. You need a Marketplace publisher with that id and a personal access token.
 
 From `apps/extension`, after `npm test` is green:
 
 ```bash
-npx @vscode/vsce@2.32.0 login SalimCastellanos
+npx @vscode/vsce@2.32.0 login BigAgentCreator
 npx @vscode/vsce@2.32.0 publish --skip-license
 ```
 

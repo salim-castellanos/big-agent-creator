@@ -9,7 +9,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { designerHtml, type Ui } from "./designer";
-import { arrange, captureFolder, createProject, deleteItem, deliveryCheck, ensureStudioFile, executionSteps, flowLinks, initWorkspace, linksExcept, loadProject, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, telegramReach, telegramSetWebhookTarget, toggleLink, writeEvalCase, writeLayout } from "./project";
+import { copy, phrase } from "./copy";
+import { arrange, captureFolder, createProject, deleteItem, deliveryCheck, ensureStudioFile, executionSteps, flowLinks, initWorkspace, keepWorkspace, linksExcept, loadExample, loadProject, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, telegramReach, telegramSetWebhookTarget, toggleLink, writeEvalCase, writeLayout } from "./project";
 
 test("an agent folder keeps secrets out of the image", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
@@ -44,6 +45,10 @@ test("initialize keeps files already in the folder and the canvas can read them"
   const project = initWorkspace(root, "Desk");
   assert.equal(fs.readFileSync(path.join(root, "instructions.md"), "utf8"), "# Keep me\n");
   assert.equal(project.instructions, "# Keep me\n");
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  createProject(fresh, "Hello");
+  assert.match(fs.readFileSync(path.join(fresh, "START.md"), "utf8"), /docs\/start\.md/);
+  assert.match(fs.readFileSync(path.join(fresh, "AGENTS.md"), "utf8"), /START\.md/);
   assert.equal(project.items.some((item) => item.kind === "tool" && item.name === "lookup"), true);
   assert.equal(scanWorkspace(root).missing.length, 0);
 });
@@ -287,12 +292,46 @@ test("a folder the SDK would refuse is named before Docker starts", () => {
   const html = designerHtml(loadProject(root), ui, true, undefined, "", layout, layout);
   assert.match(html, /id="ship-start"[^>]*disabled/);
   assert.match(html, /Start and Rebuild stay off until this folder is one that agent-sdk serve can load/);
+  const spanish = designerHtml(loadProject(root), { ...ui, lang: "es" }, true, undefined, "", layout, layout);
+  assert.match(spanish, /id="ship-start"[^>]*disabled/);
+  assert.match(spanish, /siguen apagados/);
+  assert.equal(spanish.includes("Start and Rebuild stay off"), false);
 });
 
-test("the telegram desk example still satisfies the serve contract", () => {
-  const example = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../examples/telegram-desk");
-  assert.equal(fs.existsSync(path.join(example, "bot", "agent.ts")), true);
-  assert.deepEqual(deliveryCheck(example), []);
+test("the shipped examples still satisfy the serve contract", () => {
+  const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../examples");
+  for (const id of ["hello", "telegram-desk", "support-desk", "change-gate"]) {
+    const example = path.join(examples, id);
+    assert.equal(fs.existsSync(path.join(example, "bot", "agent.ts")), true, id);
+    assert.deepEqual(deliveryCheck(example), [], id);
+  }
+});
+
+test("loading an example keeps the first folder and restore brings it back", () => {
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-ex-"));
+  fs.writeFileSync(path.join(dest, "mine.txt"), "mine");
+  fs.writeFileSync(path.join(dest, "old.txt"), "old");
+  fs.writeFileSync(path.join(dest, ".env"), "TOKEN=mine\n");
+  fs.mkdirSync(path.join(source, ".bigagent"), { recursive: true });
+  fs.writeFileSync(path.join(source, ".bigagent", "project.json"), JSON.stringify({ name: "Ex", secretNames: ["CURSOR_API_KEY"] }));
+  fs.writeFileSync(path.join(source, "instructions.md"), "# Ex\n");
+  fs.writeFileSync(path.join(source, "mine.txt"), "example");
+  fs.writeFileSync(path.join(source, "extra.txt"), "extra");
+  fs.writeFileSync(path.join(source, ".env"), "TOKEN=leak\n");
+  const loaded = loadExample(source, dest);
+  assert.equal(loaded.keptFresh, true);
+  assert.equal(loaded.keptEnv, true);
+  assert.equal(fs.readFileSync(path.join(dest, ".keep", "original", "mine.txt"), "utf8"), "mine");
+  assert.equal(fs.readFileSync(path.join(dest, ".keep", "original", "old.txt"), "utf8"), "old");
+  assert.equal(fs.existsSync(path.join(dest, "old.txt")), false);
+  assert.match(fs.readFileSync(path.join(dest, ".env"), "utf8"), /TOKEN=mine/);
+  assert.equal(fs.existsSync(path.join(dest, "extra.txt")), true);
+  assert.equal(keepWorkspace(dest).fresh, false);
+  restoreWorkspace(dest);
+  assert.equal(fs.readFileSync(path.join(dest, "mine.txt"), "utf8"), "mine");
+  assert.equal(fs.existsSync(path.join(dest, "extra.txt")), false);
+  assert.equal(fs.existsSync(path.join(dest, ".keep", "original", "mine.txt")), true);
 });
 
 test("telegram register stays off when the webhook secret has a character Telegram rejects", () => {
@@ -310,6 +349,10 @@ test("telegram register stays off when the webhook secret has a character Telegr
   const html = designerHtml(loadProject(root), ui, true, undefined, "", layout, layout, false, undefined, ship);
   assert.match(html, /Register webhook/);
   assert.match(html, /id="ship-webhook"[^>]*disabled/);
+  const spanish = designerHtml(loadProject(root), { ...ui, lang: "es" }, true, undefined, "", layout, layout, false, undefined, ship);
+  assert.match(spanish, /Registrar webhook/);
+  assert.match(spanish, /id="ship-webhook"[^>]*disabled/);
+  assert.equal(spanish.includes(">Register webhook<"), false);
   const deployed = designerHtml(loadProject(root), { ...ui, mode: "deploy" }, true, undefined, "", layout, layout, false, undefined, ship);
   assert.equal(deployed.includes("Register webhook"), false);
   assert.match(deployed, /http:\/\/127\.0\.0\.1:3000\/playground/);
@@ -387,4 +430,49 @@ test("a dropped card stays unconnected", () => {
   saveItem(root, { kind: "tool", name: "action", description: "", body: "", effect: "read" });
   writeLayout(root, { ...layout, links: frozen });
   assert.equal(flowLinks(loadProject(root), readLayout(root)).some((link) => link.to === "tool:action"), false);
+});
+
+test("the language switch changes labels and leaves the controls alone", () => {
+  assert.deepEqual(Object.keys(copy.en).sort(), Object.keys(copy.es).sort());
+  for (const key of Object.keys(copy.en) as Array<keyof typeof copy.en>) {
+    assert.ok(copy.en[key].trim().length > 0, key);
+    assert.ok(copy.es[key].trim().length > 0, key);
+  }
+  assert.equal(phrase("en", "Listening on http://127.0.0.1:3000."), "Listening on http://127.0.0.1:3000.");
+  assert.match(phrase("es", "Tunnel ready at https://a.trycloudflare.com. Register webhook next. Leave this session open."), /https:\/\/a\.trycloudflare\.com/);
+  assert.match(phrase("es", "No MCP named missing is on this canvas."), /missing/);
+  assert.match(phrase("es", "Loaded Hello. This folder was kept in .keep/original. Your .env stayed."), /Hello/);
+  assert.match(phrase("es", "CURSOR_API_KEY is empty. Set it in Secrets."), /CURSOR_API_KEY/);
+  assert.equal(phrase("es", "A sentence the catalog does not know."), "A sentence the catalog does not know.");
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  createProject(root, "Hello");
+  const layout = readLayout(root);
+  const base: Ui = { mode: "flow", selected: "agent", notice: "", libraryOpen: true, inspectorOpen: true, libraryWidth: 240, inspectorWidth: 300 };
+  const english = designerHtml(loadProject(root), base, true, undefined, "", layout, layout);
+  const spanish = designerHtml(loadProject(root), { ...base, lang: "es" }, true, undefined, "", layout, layout);
+  const ids = (html: string) => [...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]).sort();
+  const modes = (html: string) => [...html.matchAll(/data-mode="([^"]+)"/g)].map((match) => match[1]).sort();
+  assert.deepEqual(ids(english), ids(spanish));
+  assert.deepEqual(modes(english), modes(spanish));
+  assert.match(english, />Design</);
+  assert.match(spanish, />Diseño</);
+  assert.equal(spanish.includes(">Design<"), false);
+  const bar = spanish.slice(spanish.indexOf('<header class="bar">'), spanish.indexOf("</header>"));
+  assert.ok(bar.indexOf(">Diseño<") < bar.indexOf("data-set-lang"));
+  assert.ok(bar.indexOf("data-set-lang") < bar.indexOf('id="help-open"'));
+  assert.match(spanish, /El Agent SDK llama al modelo de Cursor/);
+  assert.equal(spanish.includes("Qué es esto"), false);
+  assert.match(english, /data-set-lang="en"/);
+  assert.match(spanish, /data-set-lang="es"/);
+  assert.match(english, /id="help" class="help" hidden/);
+  assert.match(spanish, /CURSOR_API_KEY/);
+  assert.match(spanish, /@grok\/agent-sdk/);
+  assert.match(spanish, /id="save-agent"/);
+  const open = designerHtml(loadProject(root), { ...base, lang: "es", helpOpen: true }, true, undefined, "", layout, layout);
+  assert.match(open, /id="help" class="help"><div/);
+  const examples = designerHtml(loadProject(root), { ...base, mode: "examples", lang: "es" }, true, undefined, "", layout, layout);
+  assert.match(examples, /data-example="hello"/);
+  assert.match(examples, /data-example="telegram-desk"/);
+  assert.match(examples, />Cargar</);
 });

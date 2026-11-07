@@ -1,0 +1,9 @@
+{
+  "name": "Hello",
+  "model": "auto",
+  "effort": "low",
+  "fast": true,
+  "sandbox": false,
+  "scope": "Only say hello.",
+  "secretNames": ["CURSOR_API_KEY", "AGENT_SDK_BEARER_TOKEN"]
+}

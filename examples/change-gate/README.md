@@ -1,6 +1,8 @@
 # Change gate
 
-The agent that shows the whole platform. Open this folder, then BigAgentCreator.
+Open this folder, then BigAgentCreator. Or load it from **Examples**. The first load keeps your folder in `.keep/original`.
+
+The image uses the same local contract as Telegram desk, including the playground. Sandbox stays off in this image. `review-board` and `pager` are not started by this compose file.
 
 It reviews a pull request. It can comment. It cannot merge. A person approves.
 
@@ -12,7 +14,7 @@ The main path starts in Telegram. The other entries are still there.
 | --- | --- |
 | 1 | `telegram` (the chat), plus `github`, `request`, and `weekday`. |
 | 2 | Limits |
-| 3 | Think. Grok 4.5, high effort, sandbox on. Built-in tools are only `read`, `grep`, `glob`, `ls`, and `task`. |
+| 3 | Agent. Grok 4.5, high effort. Built-in tools are only `read`, `grep`, `glob`, `ls`, and `task`. |
 | 4 | `read-diff`, and `audit` watching the run |
 | 5 | `repository` (the Cursor account) and `pager` (host only) |
 | 6 | `product-change` or `dependency-bump` |

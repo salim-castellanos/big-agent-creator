@@ -3,20 +3,27 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { designerHtml, libraryHtml, type ShipStatus, type Ui } from "./designer";
+import { phrase, t } from "./copy";
 import {
   arrange,
   captureFolder,
   deleteItem,
   ensureStudioFile,
   flowLinks,
+  GUIDE_URL,
+  GUIDE_URL_ES,
   initWorkspace,
   linksExcept,
   nextCopyName,
   positionsDiffer,
   readStudio,
   restoreFolder,
+  restoreWorkspace,
   toggleLink,
   isProject,
+  EXAMPLES,
+  keepWorkspace,
+  loadExample,
   loadProject,
   readLayout,
   scanWorkspace,
@@ -77,6 +84,7 @@ function readUi(context: vscode.ExtensionContext): Ui {
     inspectorOpen: saved?.inspectorOpen !== false,
     libraryWidth: saved?.libraryWidth ?? 240,
     inspectorWidth: saved?.inspectorWidth ?? 300,
+    lang: saved?.lang === "es" ? "es" : saved?.lang === "en" ? "en" : vscode.env.language.toLowerCase().startsWith("es") ? "es" : "en",
   };
 }
 
@@ -97,6 +105,7 @@ class Home implements vscode.WebviewViewProvider {
   private panel?: vscode.WebviewPanel;
 
   private holdNotice = "";
+  private helpOpen = false;
   private watcher?: vscode.FileSystemWatcher;
   private watchTimer?: ReturnType<typeof setTimeout>;
   private watchedRoot = "";
@@ -450,6 +459,12 @@ class Home implements vscode.WebviewViewProvider {
     return false;
   }
 
+  private examplesRoot(): string {
+    const packaged = path.join(this.context.extensionPath, "templates");
+    if (fs.existsSync(path.join(packaged, "telegram-desk", ".bigagent", "project.json"))) return packaged;
+    return path.join(this.context.extensionPath, "..", "..", "examples");
+  }
+
   private followLogs(root: string): void {
     const existing = vscode.window.terminals.find((term) => term.name === "BigAgentCreator");
     const term = existing ?? vscode.window.createTerminal({ name: "BigAgentCreator", cwd: root });
@@ -462,7 +477,10 @@ class Home implements vscode.WebviewViewProvider {
     if (saved) this.pulseAt = Date.now();
     const root = folder();
     if (root && this.panel) this.follow(root);
-    const ui = { ...readUi(this.context), notice: this.holdNotice };
+    const savedUi = readUi(this.context);
+    const lang = savedUi.lang === "es" ? "es" : "en";
+    const ui = { ...savedUi, notice: phrase(lang, this.holdNotice), helpOpen: this.helpOpen };
+    this.helpOpen = false;
     const project = root && isProject(root) ? loadProject(root) : null;
     const scan = root ? scanWorkspace(root) : undefined;
     const suggested = root ? path.basename(root) : "";
@@ -470,7 +488,10 @@ class Home implements vscode.WebviewViewProvider {
     const home = project ? arrange(project, { positions: {}, zoom: 1, pan: { x: 24, y: 16 }, look: "clear" }) : undefined;
     const studio = project ? readStudio(project.root) : undefined;
     const pulse = saved || Date.now() - this.pulseAt < 700;
-    if (this.view) this.view.webview.html = libraryHtml(project, ui, Boolean(root));
+    if (this.view) {
+      this.view.title = t(lang, "designer");
+      this.view.webview.html = libraryHtml(project, ui, Boolean(root));
+    }
     if (this.panel) this.panel.webview.html = designerHtml(project, ui, Boolean(root), scan, suggested, layout, home, pulse, studio, this.ship);
   }
 
@@ -521,6 +542,8 @@ class Home implements vscode.WebviewViewProvider {
     model?: string;
     parameters?: { name: string; type: string; required: boolean; description: string }[];
     value?: string;
+    lang?: "en" | "es";
+    helpOpen?: boolean;
   }): Promise<void> {
     const root = folder();
     const ui = readUi(this.context);
@@ -529,12 +552,18 @@ class Home implements vscode.WebviewViewProvider {
         this.openDesigner();
         return;
       }
+      if (message.type === "lang" && (message.lang === "en" || message.lang === "es")) {
+        this.helpOpen = Boolean(message.helpOpen);
+        await writeUi(this.context, { ...ui, lang: message.lang });
+        this.render();
+        return;
+      }
       if ((message.type === "undo" || message.type === "redo") && root && isProject(root)) {
         const stack = message.type === "undo" ? this.past : this.future;
         const other = message.type === "undo" ? this.future : this.past;
         const shot = stack.pop();
         if (!shot) {
-          this.panel?.webview.postMessage({ type: "hint", text: message.type === "undo" ? "Nothing to undo" : "Nothing to redo" });
+          this.panel?.webview.postMessage({ type: "hint", text: phrase(ui.lang, message.type === "undo" ? "Nothing to undo" : "Nothing to redo") });
           return;
         }
         other.push(captureFolder(root));
@@ -652,6 +681,10 @@ class Home implements vscode.WebviewViewProvider {
         } else this.render();
         return;
       }
+      if (message.type === "open-guide") {
+        await vscode.env.openExternal(vscode.Uri.parse(ui.lang === "es" ? GUIDE_URL_ES : GUIDE_URL));
+        return;
+      }
       if (message.type === "create" && root) {
         if (isExtensionRoot(root)) {
           this.render("Open the agent folder. This one is the extension.");
@@ -666,6 +699,36 @@ class Home implements vscode.WebviewViewProvider {
         this.remember(root);
         initWorkspace(root, loadProject(root).name);
         this.render("", true);
+        return;
+      }
+      if (message.type === "mode" && message.mode === "examples" && root) {
+        await writeUi(this.context, { ...ui, mode: "examples", notice: "" });
+        this.render("");
+        return;
+      }
+      if (message.type === "keep-folder" && root) {
+        const kept = keepWorkspace(root);
+        this.render(kept.fresh ? "Kept this folder in .keep/original." : "This folder was already kept. Restore brings that copy back.");
+        return;
+      }
+      if (message.type === "restore-folder" && root) {
+        restoreWorkspace(root);
+        await writeUi(this.context, { ...ui, mode: "flow", selected: "agent", notice: "" });
+        this.render("Restored the kept folder.", true);
+        return;
+      }
+      if (message.type === "load-example" && root && message.id && EXAMPLES.some((example) => example.id === message.id)) {
+        if (isExtensionRoot(root)) {
+          this.render("Open the agent folder. This one is the extension.");
+          return;
+        }
+        const source = path.join(this.examplesRoot(), message.id);
+        const loaded = loadExample(source, root);
+        const card = EXAMPLES.find((example) => example.id === message.id);
+        const kept = loaded.keptFresh ? "This folder was kept in .keep/original." : ".keep/original was already there and was not replaced.";
+        const env = loaded.keptEnv ? " Your .env stayed." : "";
+        await writeUi(this.context, { ...ui, mode: "flow", selected: "agent", notice: "" });
+        this.render(`Loaded ${card?.title || message.id}. ${kept}${env}`, true);
         return;
       }
       if (!root || !isProject(root)) return;

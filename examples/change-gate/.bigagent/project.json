@@ -3,7 +3,7 @@
   "model": "grok-4.5",
   "effort": "high",
   "fast": false,
-  "sandbox": true,
+  "sandbox": false,
   "reminders": true,
   "maxRunningTurns": 4,
   "harness": ["read", "grep", "glob", "ls", "task"],

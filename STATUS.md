@@ -1,10 +1,14 @@
 # Estado — BigAgentCreator
 
-Retomar por aquí. No hay épicas. El corte es un MVP para decidir cómo seguir.
+Retomar por aquí. Lo que ya está en la carpeta se construyó sin HU ni spec. Eso es deuda. No hay corte activo.
+
+## Siguiente
+
+Abrir la primera HU del cambio que se pida, y su runbook, antes de tocar `apps/`. Hasta entonces no se codea desde el chat. El catálogo está en `docs/05-backlog/catalog.md`.
 
 ## Dónde está
 
-`ecosystem/big-agent-creator/`. No entra al git del molde. Su git propio todavía no está abierto. El método está en `../../docs/`.
+`ecosystem/big-agent-creator/`. No entra al git del molde. Su git es `https://github.com/salim-castellanos/big-agent-creator`. `origin/main` es el corte publicado. El trabajo posterior está en el árbol y no en ese commit. Qué hace la carpeta hoy: `docs/linea-base.md`. El método está en `../../docs/`.
 
 ## Tienda
 

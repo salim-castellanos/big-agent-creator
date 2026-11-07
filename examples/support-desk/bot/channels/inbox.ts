@@ -1,5 +1,5 @@
 import { defineChannel, POST } from "@grok/agent-sdk/channels";
-import { z } from "zod";
+import { z } from "zod/v4";
 
 // @bigagent generated
 // Preset: webhook. Signature secret: WEBHOOK_SECRET.

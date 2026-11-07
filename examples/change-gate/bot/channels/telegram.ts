@@ -1,5 +1,5 @@
 import { defineChannel, POST, publicEndpoint } from "@grok/agent-sdk/channels";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { replyTelegram } from "../lib/telegram.js";
 // @bigagent generated
 type TelegramUpdate = { message?: { text?: string; chat?: { id?: number } } };

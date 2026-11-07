@@ -1,6 +1,8 @@
 # Support desk
 
-The agent this folder will ship. Open the folder, then BigAgentCreator.
+Open this folder, then BigAgentCreator. Or load it from **Examples**. The first load keeps your folder in `.keep/original`.
+
+The image uses the same Docker contract as Telegram desk: `package.json` with `"type": "module"`, `npm install`, and the playground at `http://127.0.0.1:3000/playground`. `knowledge` and `cases` are not started by this compose file.
 
 Both triggers pass Limits, then Think looks up one passage. If the base answers, it cites the document and stops. If not, it opens a case and, only when a person must decide, escalates that case.
 
@@ -8,7 +10,7 @@ Both triggers pass Limits, then Think looks up one passage. If the base answers,
 | --- | --- |
 | 1 | `inbox` (signed `POST /hooks/inbox`) and `morning` (Monday at 9, a schedule, not a chat). Neither waits for the other. |
 | 2 | Limits |
-| 3 | Think, model Strong |
+| 3 | Agent |
 | 4 | `lookup-passage` |
 | 5 | `knowledge` at `http://knowledge:7000/mcp` |
 | 6 | `answer-from-base` or `hand-off` |

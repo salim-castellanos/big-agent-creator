@@ -4,7 +4,7 @@
 
 Extensión para VS Code y Cursor. Diseñas un agente de IA como un flujo en un lienzo y lo guardas como carpeta: disparadores, límites, herramientas, guías y un chat de Telegram. Esa carpeta corre en Docker y se prueba en el playground. Un camino que no llega a la tarjeta Agent responde en código y no llama a un modelo. Los valores secretos se quedan en `.env`.
 
-La primera versión para la tienda es la **0.2.0**. La extensión está en `apps/extension`. La página que la gente lee en la tienda es `apps/extension/README.md`, en inglés. La frase de búsqueda es `description` en `apps/extension/package.json`.
+La primera versión para la tienda es la **0.2.0**. La extensión está en `apps/extension`. La página que la gente lee en la tienda es `apps/extension/README.md`, en inglés. La frase de búsqueda es `description` en `apps/extension/package.json`. El camino desde una carpeta vacía hasta el playground está en [Empezar](./docs/start.es.md).
 
 ## Qué puedes hacer
 
@@ -23,6 +23,7 @@ Un disparador que no llega a Agent responde en código y no llama al modelo. La 
 
 | Carpeta | Uso |
 | --- | --- |
+| `examples/hello` | Solo el playground. Escribes hi y responde hello. |
 | `examples/telegram-desk` | Un chat de Telegram. El primer despliegue para aprender. |
 | `examples/support-desk` | Una mesa con base de conocimiento. |
 | `examples/change-gate` | Un recorrido de las piezas del lienzo. |
@@ -43,12 +44,12 @@ Instala el `.vsix` desde el editor, o publícalo.
 
 ## Publicar en la tienda
 
-El publisher en `package.json` es `SalimCastellanos`. Hace falta un publisher del Marketplace con ese id y un token de acceso personal.
+El publisher en `package.json` es `BigAgentCreator`. Hace falta un publisher del Marketplace con ese id y un token de acceso personal.
 
 Desde `apps/extension`, con `npm test` en verde:
 
 ```bash
-npx @vscode/vsce@2.32.0 login SalimCastellanos
+npx @vscode/vsce@2.32.0 login BigAgentCreator
 npx @vscode/vsce@2.32.0 publish --skip-license
 ```
 

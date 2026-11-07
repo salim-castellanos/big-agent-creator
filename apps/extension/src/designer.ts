@@ -1,4 +1,5 @@
-import { deliveryCheck, executionSteps, flowLinks, review, telegramReach, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
+import { exampleText, phrase, studioText, t, type CopyKey, type Lang } from "./copy";
+import { deliveryCheck, EXAMPLES, executionSteps, flowLinks, GUIDE_URL, GUIDE_URL_ES, review, telegramReach, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
 
 export type ShipStatus = {
   docker: "unknown" | "down" | "ready";
@@ -10,36 +11,28 @@ export type ShipStatus = {
 };
 
 export type Ui = {
-  mode: "flow" | "prove" | "platform" | "secrets" | "connect" | "deploy";
+  mode: "flow" | "prove" | "platform" | "secrets" | "connect" | "deploy" | "examples";
   selected: string;
   notice: string;
   libraryOpen: boolean;
   inspectorOpen: boolean;
   libraryWidth: number;
   inspectorWidth: number;
+  lang?: Lang;
+  helpOpen?: boolean;
 };
 
-const KIND_LABEL: Record<Kind, string> = {
-  channel: "Trigger",
-  schedule: "Schedule",
-  tool: "Action",
-  skill: "Guide",
-  mcp: "Service",
-  host: "Host",
-  subagent: "Subagent",
-  hook: "Hook",
-};
+function langOf(ui: { lang?: Lang }): Lang {
+  return ui.lang === "es" ? "es" : "en";
+}
 
-const PURPOSE: Record<Kind, string> = {
-  channel: "Starts a run from outside",
-  schedule: "Starts a run on a clock",
-  tool: "Something it can do",
-  skill: "Steps, only when needed",
-  mcp: "A system the model can call",
-  host: "A system only code can call",
-  subagent: "Another agent it can delegate to",
-  hook: "Watches a run. Cannot change it",
-};
+function kindLabel(lang: Lang, kind: string): string {
+  return t(lang, `kind_${kind}` as CopyKey);
+}
+
+function purpose(lang: Lang, kind: string): string {
+  return t(lang, `purpose_${kind}` as CopyKey);
+}
 
 function icon(name: Kind | "agent" | "limits"): string {
   const body: Record<string, string> = {
@@ -63,8 +56,8 @@ function esc(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
 }
 
-function shell(body: string, script: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8" />
+function shell(body: string, script: string, lang: Lang = "en"): string {
+  return `<!doctype html><html lang="${lang}" data-lang="${lang}"><head><meta charset="utf-8" />
 <style>
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
@@ -88,38 +81,38 @@ ${body}
 </body></html>`;
 }
 
-function pill(item: Item): string {
+function pill(item: Item, lang: Lang): string {
   if (item.kind === "tool") {
     const effect = item.effect || "read";
-    const label = effect === "irreversible" ? "Needs a person" : effect === "write" ? "Writes" : "Reads";
-    const inputs = item.parameters?.length ? `${item.parameters.length} input${item.parameters.length === 1 ? "" : "s"}` : "";
+    const label = effect === "irreversible" ? t(lang, "needs_person") : effect === "write" ? t(lang, "writes") : t(lang, "reads");
+    const inputs = item.parameters?.length ? t(lang, item.parameters.length === 1 ? "one_input" : "n_inputs", { n: item.parameters.length }) : "";
     return `<span class="pill ${effect}">${label}</span>${inputs ? `<span class="pill">${inputs}</span>` : ""}`;
   }
-  if (item.kind === "channel") return `<span class="pill">${item.verify ? "Signed" : "Open"}</span>`;
+  if (item.kind === "channel") return `<span class="pill">${item.verify ? t(lang, "signed") : t(lang, "open")}</span>`;
   if (item.kind === "skill") return item.description ? `<em>${esc(item.description)}</em>` : "";
   if (item.kind === "mcp") return item.url ? `<em>${esc(item.url)}</em>` : "";
   return "";
 }
 
-function stepBadge(steps: Record<string, number>, counts: Map<number, number>, id: string): string {
+function stepBadge(steps: Record<string, number>, counts: Map<number, number>, id: string, lang: Lang): string {
   const step = steps[id];
   if (!step) return "";
   const parallel = (counts.get(step) || 0) > 1;
   const title = parallel
-    ? `Step ${step}. Anything else marked ${step} can run at the same time.`
+    ? t(lang, "step_parallel", { n: step })
     : step === 1
-      ? "Step 1. Nothing has to finish before this."
-      : `Step ${step}. It waits until every arrow into it has finished.`;
+      ? t(lang, "step_first")
+      : t(lang, "step_wait", { n: step });
   return `<span class="stepno${parallel ? " parallel" : ""}" title="${esc(title)}">${step}</span>`;
 }
 
-function nodeButton(item: Item, selected: string, at?: { x: number; y: number }, home?: { x: number; y: number }, gap = false, badge = ""): string {
+function nodeButton(item: Item, selected: string, at?: { x: number; y: number }, home?: { x: number; y: number }, gap = false, badge = "", lang: Lang = "en"): string {
   const id = `${item.kind}:${item.name}`;
-  const blurb = (item.kind === "channel" ? item.route || "No endpoint" : item.kind === "tool" ? item.calls || "Does not say what it calls" : item.kind === "skill" || item.kind === "mcp" ? "" : item.description || item.body).replace(/\s+/g, " ").trim().slice(0, 72);
+  const blurb = (item.kind === "channel" ? item.route || t(lang, "no_endpoint") : item.kind === "tool" ? item.calls || t(lang, "no_calls") : item.kind === "skill" || item.kind === "mcp" ? "" : item.description || item.body).replace(/\s+/g, " ").trim().slice(0, 72);
   const place = at ? ` style="left:${at.x}px;top:${at.y}px" data-home-x="${home?.x ?? at.x}" data-home-y="${home?.y ?? at.y}"` : "";
   return `<button type="button" class="node ${item.kind}${id === selected ? " on" : ""}" data-id="${esc(id)}"${place}>
     ${badge}<span class="mark">${icon(item.kind)}</span>
-    <span class="copy"><span class="k">${KIND_LABEL[item.kind]}</span><strong>${esc(item.name)}</strong>${pill(item)}${gap ? `<span class="pill gap">Incomplete</span>` : ""}${blurb ? `<em>${esc(blurb)}</em>` : ""}</span>
+    <span class="copy"><span class="k">${kindLabel(lang, item.kind)}</span><strong>${esc(item.name)}</strong>${pill(item, lang)}${gap ? `<span class="pill gap">${t(lang, "incomplete")}</span>` : ""}${blurb ? `<em>${esc(blurb)}</em>` : ""}</span>
   </button>`;
 }
 
@@ -128,102 +121,102 @@ function group(step: string, title: string, hint: string, items: Item[], selecte
   return `<section><header class="step"><span>${step}</span><h3>${title}</h3></header><p class="hint">${hint}</p>${cards || `<p class="ghost">Nothing here yet. Add it from the library.</p>`}</section>`;
 }
 
-function inspector(project: Project, selected: string): string {
+function inspector(project: Project, selected: string, lang: Lang): string {
   if (selected === "agent") {
     const harness = project.harness;
     const tools = ["read", "grep", "glob", "ls", "edit", "delete", "shell", "task"];
     const boxes = tools
       .map((name) => `<label class="check"><input class="harness" type="checkbox" value="${name}" ${!harness || harness.includes(name) ? "checked" : ""} /> ${name}</label>`)
       .join("");
-    return `<p class="eyebrow">Agent</p><h2>${esc(project.name)}</h2><p class="path">bot/agent.ts · instructions.md</p>
-      <p class="hint">The one definition for this folder. A trigger answers with the model only when its arrow reaches this card.</p>
-      <label>Model<select id="model"><option value="auto" ${project.model === "auto" ? "selected" : ""}>Auto</option><option value="grok-4.5" ${project.model === "grok-4.5" ? "selected" : ""}>Grok 4.5</option><option value="composer-2.5" ${project.model === "composer-2.5" ? "selected" : ""}>Composer 2.5</option></select></label>
-      <label>Effort<select id="effort"><option value="low" ${project.effort === "low" ? "selected" : ""}>Low</option><option value="medium" ${project.effort === "medium" ? "selected" : ""}>Medium</option><option value="high" ${project.effort === "high" ? "selected" : ""}>High</option></select></label>
-      <label class="check"><input id="fast" type="checkbox" ${project.fast ? "checked" : ""} /> Fast</label>
-      <p class="hint">Auto leaves the model to the SDK. Effort and Fast are parameters, not part of the model name.</p>
-      <label class="check"><input id="sandbox" type="checkbox" ${project.sandbox ? "checked" : ""} /> Sandbox untrusted input</label>
-      <label class="check"><input id="limit-tools" type="checkbox" ${harness ? "checked" : ""} /> Limit built-in tools</label>
+    return `<p class="eyebrow">${kindLabel(lang, "agent")}</p><h2>${esc(project.name)}</h2><p class="path">bot/agent.ts · instructions.md</p>
+      <p class="hint">${t(lang, "agent_hint")}</p>
+      <label>${t(lang, "model")}<select id="model"><option value="auto" ${project.model === "auto" ? "selected" : ""}>Auto</option><option value="grok-4.5" ${project.model === "grok-4.5" ? "selected" : ""}>Grok 4.5</option><option value="composer-2.5" ${project.model === "composer-2.5" ? "selected" : ""}>Composer 2.5</option></select></label>
+      <label>${t(lang, "effort")}<select id="effort"><option value="low" ${project.effort === "low" ? "selected" : ""}>${t(lang, "low")}</option><option value="medium" ${project.effort === "medium" ? "selected" : ""}>${t(lang, "medium")}</option><option value="high" ${project.effort === "high" ? "selected" : ""}>${t(lang, "high")}</option></select></label>
+      <label class="check"><input id="fast" type="checkbox" ${project.fast ? "checked" : ""} /> ${t(lang, "fast")}</label>
+      <p class="hint">${t(lang, "auto_hint")}</p>
+      <label class="check"><input id="sandbox" type="checkbox" ${project.sandbox ? "checked" : ""} /> ${t(lang, "sandbox")}</label>
+      <label class="check"><input id="limit-tools" type="checkbox" ${harness ? "checked" : ""} /> ${t(lang, "limit_tools")}</label>
       <div id="harness">${boxes}</div>
-      <p class="hint">Leave the limit off for the full set. Shell is required for an action that runs beside the checkout. Task is required to delegate to a subagent.</p>
-      <label class="check"><input id="reminders" type="checkbox" ${project.reminders ? "checked" : ""} /> Let it set reminders</label>
-      <label>Max running turns<input id="turns" value="${project.maxRunningTurns ?? ""}" placeholder="empty means no cap" /></label>
-      <label>Egress domains<textarea id="egress">${esc(project.egress.join("\n"))}</textarea></label>
-      <label>Instructions<textarea id="instructions">${esc(project.instructions)}</textarea></label>
-      <div class="row"><button type="button" id="save-agent" class="primary">Save</button></div>`;
+      <p class="hint">${t(lang, "harness_hint")}</p>
+      <label class="check"><input id="reminders" type="checkbox" ${project.reminders ? "checked" : ""} /> ${t(lang, "reminders")}</label>
+      <label>${t(lang, "max_turns")}<input id="turns" value="${project.maxRunningTurns ?? ""}" placeholder="${esc(t(lang, "no_cap"))}" /></label>
+      <label>${t(lang, "egress")}<textarea id="egress">${esc(project.egress.join("\n"))}</textarea></label>
+      <label>${t(lang, "instructions")}<textarea id="instructions">${esc(project.instructions)}</textarea></label>
+      <div class="row"><button type="button" id="save-agent" class="primary">${t(lang, "save")}</button></div>`;
   }
   if (selected === "scope") {
-    return `<p class="eyebrow">Limits</p><h2>Scope</h2><p class="path">.bigagent/project.json</p>
-      <p class="hint">What this agent will not do. A customer message cannot widen it.</p>
-      <label>Refusal<textarea id="scope">${esc(project.scope)}</textarea></label>
-      <div class="row"><button type="button" id="save-scope" class="primary">Save</button></div>`;
+    return `<p class="eyebrow">${kindLabel(lang, "limits")}</p><h2>${t(lang, "scope_name")}</h2><p class="path">.bigagent/project.json</p>
+      <p class="hint">${t(lang, "limits_hint")}</p>
+      <label>${t(lang, "refusal")}<textarea id="scope">${esc(project.scope)}</textarea></label>
+      <div class="row"><button type="button" id="save-scope" class="primary">${t(lang, "save")}</button></div>`;
   }
   const [kind, name] = selected.split(":") as [Kind, string];
   const item = project.items.find((entry) => entry.kind === kind && entry.name === name);
-  if (!item) return `<p class="hint">Select a node on the flow, or pick one in the library.</p>`;
-  const head = `<p class="eyebrow">${KIND_LABEL[kind]}</p><h2>${esc(item.name)}</h2>`;
-  const foot = `<div class="row"><button type="button" id="save-item" class="primary">Save</button><button type="button" id="delete-item">Delete</button></div>
-    <p class="hint">Delete removes this file. Ctrl+Z brings it back.</p>`;
+  if (!item) return `<p class="hint">${t(lang, "select_node")}</p>`;
+  const head = `<p class="eyebrow">${kindLabel(lang, kind)}</p><h2>${esc(item.name)}</h2>`;
+  const foot = `<div class="row"><button type="button" id="save-item" class="primary">${t(lang, "save")}</button><button type="button" id="delete-item">${t(lang, "delete")}</button></div>
+    <p class="hint">${t(lang, "delete_hint")}</p>`;
   if (kind === "tool") {
     const effect = item.effect || "read";
     const params = (item.parameters || [])
       .map(
         (param) => `<div class="param">
-          <input name="pname" value="${esc(param.name)}" placeholder="name" />
+          <input name="pname" value="${esc(param.name)}" placeholder="${esc(t(lang, "ph_name"))}" />
           <select name="ptype">${["string", "number", "boolean"].map((type) => `<option ${param.type === type ? "selected" : ""}>${type}</option>`).join("")}</select>
-          <label class="check"><input name="preq" type="checkbox" ${param.required ? "checked" : ""} /> required</label>
-          <input name="pdesc" value="${esc(param.description)}" placeholder="what it means" />
-          <button type="button" class="quiet drop-param">Remove</button>
+          <label class="check"><input name="preq" type="checkbox" ${param.required ? "checked" : ""} /> ${t(lang, "required")}</label>
+          <input name="pdesc" value="${esc(param.description)}" placeholder="${esc(t(lang, "ph_means"))}" />
+          <button type="button" class="quiet drop-param">${t(lang, "remove")}</button>
         </div>`,
       )
       .join("");
     return `${head}<p class="path">tools/${esc(item.name)}.json</p>
-      <label>What it does<textarea id="field">${esc(item.description)}</textarea></label>
-      <label>Calls an MCP on this canvas<select id="call-mcp"><option value="">HTTP path instead</option>${project.items.filter((entry) => entry.kind === "mcp").map((entry) => `<option value="mcp:${esc(entry.name)}" ${item.calls === `mcp:${entry.name}` ? "selected" : ""}>${esc(entry.name)}</option>`).join("")}</select></label>
-      <label>Or an HTTP path<input id="calls" value="${esc(item.calls && !item.calls.startsWith("mcp:") ? item.calls : "")}" placeholder="POST /search" /></label>
-      <label>Secret name<input id="secret" value="${esc(item.secret || "")}" placeholder="only if this call needs one" /></label>
-      <label>Effect<select id="effect"><option value="read" ${effect === "read" ? "selected" : ""}>Reads</option><option value="write" ${effect === "write" ? "selected" : ""}>Writes</option><option value="idempotent" ${effect === "idempotent" ? "selected" : ""}>Idempotent</option><option value="irreversible" ${effect === "irreversible" ? "selected" : ""}>Needs a person</option></select></label>
-      <label>Runs<select id="execution"><option value="server" ${item.execution !== "agent" ? "selected" : ""}>On the server</option><option value="agent" ${item.execution === "agent" ? "selected" : ""}>Beside the checkout</option></select></label>
-      <p class="hint">Reads can run again. Writes run once. Idempotent can repeat safely. Needs a person waits for approval. Beside the checkout needs the shell tool.</p>
-      <label>Procedure<textarea id="procedure" placeholder="return input;">${esc(item.body)}</textarea></label>
+      <label>${t(lang, "what_it_does")}<textarea id="field">${esc(item.description)}</textarea></label>
+      <label>${t(lang, "calls_mcp")}<select id="call-mcp"><option value="">${t(lang, "http_instead")}</option>${project.items.filter((entry) => entry.kind === "mcp").map((entry) => `<option value="mcp:${esc(entry.name)}" ${item.calls === `mcp:${entry.name}` ? "selected" : ""}>${esc(entry.name)}</option>`).join("")}</select></label>
+      <label>${t(lang, "or_http")}<input id="calls" value="${esc(item.calls && !item.calls.startsWith("mcp:") ? item.calls : "")}" placeholder="POST /search" /></label>
+      <label>${t(lang, "secret_name")}<input id="secret" value="${esc(item.secret || "")}" placeholder="${esc(t(lang, "secret_if"))}" /></label>
+      <label>${t(lang, "effect")}<select id="effect"><option value="read" ${effect === "read" ? "selected" : ""}>${t(lang, "reads")}</option><option value="write" ${effect === "write" ? "selected" : ""}>${t(lang, "writes")}</option><option value="idempotent" ${effect === "idempotent" ? "selected" : ""}>${t(lang, "idempotent")}</option><option value="irreversible" ${effect === "irreversible" ? "selected" : ""}>${t(lang, "needs_person")}</option></select></label>
+      <label>${t(lang, "runs")}<select id="execution"><option value="server" ${item.execution !== "agent" ? "selected" : ""}>${t(lang, "on_server")}</option><option value="agent" ${item.execution === "agent" ? "selected" : ""}>${t(lang, "beside")}</option></select></label>
+      <p class="hint">${t(lang, "effect_hint")}</p>
+      <label>${t(lang, "procedure")}<textarea id="procedure" placeholder="return input;">${esc(item.body)}</textarea></label>
       <div id="params">${params}</div>
-      <button type="button" id="add-param">Add parameter</button>${foot}`;
+      <button type="button" id="add-param">${t(lang, "add_parameter")}</button>${foot}`;
   }
   if (kind === "skill") {
     return `${head}<p class="path">skills/${esc(item.name)}.md</p>
-      <label>Load it when<input id="when" value="${esc(item.description)}" placeholder="the question is outside the knowledge base" /></label>
-      <label>Procedure<textarea id="field">${esc(item.body)}</textarea></label>${foot}`;
+      <label>${t(lang, "load_when")}<input id="when" value="${esc(item.description)}" placeholder="${esc(t(lang, "load_when_ph"))}" /></label>
+      <label>${t(lang, "procedure")}<textarea id="field">${esc(item.body)}</textarea></label>${foot}`;
   }
   if (kind === "mcp" || kind === "host") {
     const transport = item.transport || "http";
     const where = kind === "host" ? "bot/host-connections" : "bot/mcp-connections";
     return `${head}<p class="path">${where}/${esc(item.name)}.ts</p>
-      <p class="hint">${kind === "host" ? "Host code can call this. The model never sees it." : "The model can call this when it is advertised, or an action can name it."}</p>
-      <label>Transport<select id="transport"><option value="http" ${transport === "http" ? "selected" : ""}>HTTP</option><option value="stdio" ${transport === "stdio" ? "selected" : ""}>Local process</option><option value="account" ${transport === "account" ? "selected" : ""}>Cursor account</option></select></label>
-      <label>Server URL<input id="url" value="${esc(item.url || "")}" placeholder="https://mcp.example.com/mcp" /></label>
-      <label>Command<input id="command" value="${esc(item.command || "")}" placeholder="node" /></label>
-      <label>Secret name<input id="secret" value="${esc(item.secret || "")}" placeholder="MCP_TOKEN" /></label>
-      <label class="check"><input id="advertise" type="checkbox" ${item.advertise ? "checked" : ""} /> Advertise its tools to the model</label>
-      <label>What it is for<textarea id="field">${esc(item.description)}</textarea></label>${foot}`;
+      <p class="hint">${kind === "host" ? t(lang, "host_hint") : t(lang, "mcp_hint")}</p>
+      <label>${t(lang, "transport")}<select id="transport"><option value="http" ${transport === "http" ? "selected" : ""}>${t(lang, "http")}</option><option value="stdio" ${transport === "stdio" ? "selected" : ""}>${t(lang, "local_process")}</option><option value="account" ${transport === "account" ? "selected" : ""}>${t(lang, "cursor_account")}</option></select></label>
+      <label>${t(lang, "server_url")}<input id="url" value="${esc(item.url || "")}" placeholder="https://mcp.example.com/mcp" /></label>
+      <label>${t(lang, "command")}<input id="command" value="${esc(item.command || "")}" placeholder="node" /></label>
+      <label>${t(lang, "secret_name")}<input id="secret" value="${esc(item.secret || "")}" placeholder="MCP_TOKEN" /></label>
+      <label class="check"><input id="advertise" type="checkbox" ${item.advertise ? "checked" : ""} /> ${t(lang, "advertise")}</label>
+      <label>${t(lang, "what_for")}<textarea id="field">${esc(item.description)}</textarea></label>${foot}`;
   }
   if (kind === "schedule") {
     return `${head}<p class="path">bot/schedules/${esc(item.name)}.md</p>
-      <p class="hint">A schedule starts a new run. It does not resume a conversation. UTC, to the minute.</p>
-      <div class="row"><button type="button" data-cron="0 * * * *">Every hour</button><button type="button" data-cron="0 9 * * *">Every day at 9</button><button type="button" data-cron="0 9 * * 1">Monday at 9</button></div>
-      <label>Schedule<input id="route-cron" value="${esc(item.route || "")}" placeholder="0 9 * * 1" /></label>
-      <label>What the run should do<textarea id="field">${esc(item.description)}</textarea></label>${foot}`;
+      <p class="hint">${t(lang, "schedule_hint")}</p>
+      <div class="row"><button type="button" data-cron="0 * * * *">${t(lang, "every_hour")}</button><button type="button" data-cron="0 9 * * *">${t(lang, "every_day")}</button><button type="button" data-cron="0 9 * * 1">${t(lang, "monday")}</button></div>
+      <label>${t(lang, "schedule")}<input id="route-cron" value="${esc(item.route || "")}" placeholder="0 9 * * 1" /></label>
+      <label>${t(lang, "run_should")}<textarea id="field">${esc(item.description)}</textarea></label>${foot}`;
   }
   if (kind === "subagent") {
     return `${head}<p class="path">bot/subagents/${esc(item.name)}/</p>
-      <p class="hint">Agent delegates here only when the built-in task tool is allowed. The description is what the parent reads.</p>
-      <label>Delegate when<input id="when" value="${esc(item.description)}" placeholder="a pull request needs a second pass" /></label>
-      <label>Instructions<textarea id="field">${esc(item.body)}</textarea></label>${foot}`;
+      <p class="hint">${t(lang, "subagent_hint")}</p>
+      <label>${t(lang, "delegate_when")}<input id="when" value="${esc(item.description)}" placeholder="${esc(t(lang, "delegate_ph"))}" /></label>
+      <label>${t(lang, "instructions")}<textarea id="field">${esc(item.body)}</textarea></label>${foot}`;
   }
   if (kind === "hook") {
     const events = ["message.received", "turn.completed", "turn.failed", "actions.requested", "actions.completed", "action.result"];
     return `${head}<p class="path">bot/hooks/${esc(item.name)}.ts</p>
-      <p class="hint">A hook watches the run after the fact. It cannot change the prompt, the turn, or the reply.</p>
-      <label>Event<select id="field">${events.map((event) => `<option ${item.description === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
-      <label>Procedure<textarea id="procedure">${esc(item.body)}</textarea></label>${foot}`;
+      <p class="hint">${t(lang, "hook_hint")}</p>
+      <label>${t(lang, "event")}<select id="field">${events.map((event) => `<option ${item.description === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <label>${t(lang, "procedure")}<textarea id="procedure">${esc(item.body)}</textarea></label>${foot}`;
   }
   const type = item.description || "webhook";
   const types = ["telegram", "webhook", "slack", "github", "gitlab", "bitbucket", "cron"]
@@ -231,83 +224,99 @@ function inspector(project: Project, selected: string): string {
     .join("");
   const show = (name: string) => (type === name ? "" : " hidden");
   return `${head}<p class="path">channels/${esc(item.name)}.json</p>
-    <label>Type<select id="field">${types}</select></label>
+    <label>${t(lang, "type")}<select id="field">${types}</select></label>
     <div class="assist" data-for="webhook"${show("webhook")}>
-      <label>Endpoint<input id="route" value="${esc(type === "webhook" ? item.route || "" : "")}" placeholder="/hooks/inbox" /></label>
-      <p class="hint">A hook is a path. Example: POST /hooks/inbox</p>
-      <label class="check"><input id="verify" type="checkbox" ${item.verify ? "checked" : ""} /> Verify the signature</label>
-      <label>Secret name<input id="secret" value="${esc(item.secret || "")}" placeholder="WEBHOOK_SECRET" /></label>
+      <label>${t(lang, "endpoint")}<input id="route" value="${esc(type === "webhook" ? item.route || "" : "")}" placeholder="/hooks/inbox" /></label>
+      <p class="hint">${t(lang, "hook_path")}</p>
+      <label class="check"><input id="verify" type="checkbox" ${item.verify ? "checked" : ""} /> ${t(lang, "verify_sig")}</label>
+      <label>${t(lang, "secret_name")}<input id="secret" value="${esc(item.secret || "")}" placeholder="WEBHOOK_SECRET" /></label>
     </div>
     <div class="assist" data-for="telegram"${show("telegram")}>
-      <label>Endpoint<input id="route-telegram" value="${esc(type === "telegram" ? item.route || "/" : "/")}" placeholder="/" /></label>
-      <p class="hint">Telegram posts to /v1/channels/${esc(item.name)} plus this path. / keeps it short. One chat keeps one conversation.</p>
-      <label class="check"><input id="verify-telegram" type="checkbox" ${item.verify ? "checked" : ""} /> Verify the secret token</label>
-      <label>Webhook secret name<input id="secret-telegram" value="${esc(item.secret || "TELEGRAM_WEBHOOK_SECRET")}" placeholder="TELEGRAM_WEBHOOK_SECRET" /></label>
-      <p class="hint">The bot token is TELEGRAM_BOT_TOKEN in Secrets. The answer is sent back to the same chat after the turn.</p>
+      <label>${t(lang, "endpoint")}<input id="route-telegram" value="${esc(type === "telegram" ? item.route || "/" : "/")}" placeholder="/" /></label>
+      <p class="hint">${esc(t(lang, "telegram_hint", { name: item.name }))}</p>
+      <label class="check"><input id="verify-telegram" type="checkbox" ${item.verify ? "checked" : ""} /> ${t(lang, "verify_token")}</label>
+      <label>${t(lang, "webhook_secret")}<input id="secret-telegram" value="${esc(item.secret || "TELEGRAM_WEBHOOK_SECRET")}" placeholder="TELEGRAM_WEBHOOK_SECRET" /></label>
+      <p class="hint">${t(lang, "telegram_token_hint")}</p>
     </div>
     <div class="assist" data-for="cron"${show("cron")}>
-      <p class="hint">Pick a rhythm. The field keeps the cron expression.</p>
-      <div class="row"><button type="button" data-cron="0 * * * *">Every hour</button><button type="button" data-cron="0 9 * * *">Every day at 9</button><button type="button" data-cron="0 9 * * 1">Monday at 9</button></div>
-      <label>Schedule<input id="route-cron" value="${esc(type === "cron" ? item.route || "" : "")}" placeholder="0 9 * * 1" /></label>
+      <p class="hint">${t(lang, "cron_hint")}</p>
+      <div class="row"><button type="button" data-cron="0 * * * *">${t(lang, "every_hour")}</button><button type="button" data-cron="0 9 * * *">${t(lang, "every_day")}</button><button type="button" data-cron="0 9 * * 1">${t(lang, "monday")}</button></div>
+      <label>${t(lang, "schedule")}<input id="route-cron" value="${esc(type === "cron" ? item.route || "" : "")}" placeholder="0 9 * * 1" /></label>
     </div>
     <div class="assist" data-for="slack"${show("slack")}>
-      <label>Event<select id="route-slack">${["message", "app_mention"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
-      <p class="hint">Slack wakes the agent on this event.</p>
+      <label>${t(lang, "event")}<select id="route-slack">${["message", "app_mention"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <p class="hint">${t(lang, "slack_hint")}</p>
     </div>
     <div class="assist" data-for="github"${show("github")}>
-      <label>Event<select id="route-github">${["pull_request", "push", "issues"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
-      <p class="hint">GitHub wakes the agent on this event. On Cursor hosting it uses the connected account, so no public URL is required.</p>
+      <label>${t(lang, "event")}<select id="route-github">${["pull_request", "push", "issues"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <p class="hint">${t(lang, "github_hint")}</p>
     </div>
     <div class="assist" data-for="gitlab"${show("gitlab")}>
-      <label>Event<select id="route-gitlab">${["merge_request", "push", "note"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <label>${t(lang, "event")}<select id="route-gitlab">${["merge_request", "push", "note"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
     </div>
     <div class="assist" data-for="bitbucket"${show("bitbucket")}>
-      <label>Event<select id="route-bitbucket">${["pull_request", "push"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <label>${t(lang, "event")}<select id="route-bitbucket">${["pull_request", "push"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
     </div>
-    <label>Note<textarea id="extra">${esc(item.body)}</textarea></label>${foot}`;
+    <label>${t(lang, "note")}<textarea id="extra">${esc(item.body)}</textarea></label>${foot}`;
 }
 
 function palette(project: Project, ui: Ui): string {
+  const lang = langOf(ui);
   const optional = (kind: "limits" | "think", on: boolean) => {
-    const label = kind === "limits" ? "Limits" : "Agent";
-    const purpose = kind === "limits" ? "What one path must refuse" : "This folder's one definition";
-    return `<button type="button" class="chip ${kind}" draggable="${on ? "false" : "true"}" data-kind="${kind}" ${on ? "disabled" : ""} title="${on ? "Already on the canvas" : "Add to the canvas"}"><span class="mark">${icon(kind === "limits" ? "limits" : "agent")}</span><span class="copy"><span class="k">${label}</span><span class="hint">${purpose}</span></span></button>`;
+    const label = kind === "limits" ? kindLabel(lang, "limits") : kindLabel(lang, "agent");
+    const blurb = kind === "limits" ? t(lang, "purpose_limits") : t(lang, "purpose_agent");
+    return `<button type="button" class="chip ${kind}" draggable="${on ? "false" : "true"}" data-kind="${kind}" ${on ? "disabled" : ""} title="${on ? esc(t(lang, "already_on")) : esc(t(lang, "add_to_canvas"))}"><span class="mark">${icon(kind === "limits" ? "limits" : "agent")}</span><span class="copy"><span class="k">${label}</span><span class="hint">${blurb}</span></span></button>`;
   };
   const chips = KINDS.map(
-    (kind) => `<button type="button" class="chip ${kind}" draggable="true" data-kind="${kind}"><span class="mark">${icon(kind)}</span><span class="copy"><span class="k">${KIND_LABEL[kind]}</span><span class="hint">${PURPOSE[kind]}</span></span></button>`,
+    (kind) => `<button type="button" class="chip ${kind}" draggable="true" data-kind="${kind}"><span class="mark">${icon(kind)}</span><span class="copy"><span class="k">${kindLabel(lang, kind)}</span><span class="hint">${purpose(lang, kind)}</span></span></button>`,
   ).join("");
   const rows = [
-    project.limits ? `<button type="button" class="item scope${ui.selected === "scope" ? " on" : ""}" data-id="scope">Limits · Scope</button>` : "",
-    project.think ? `<button type="button" class="item agent${ui.selected === "agent" ? " on" : ""}" data-id="agent">Agent · ${esc(project.name)}</button>` : "",
+    project.limits ? `<button type="button" class="item scope${ui.selected === "scope" ? " on" : ""}" data-id="scope">${kindLabel(lang, "limits")} · ${t(lang, "scope_name")}</button>` : "",
+    project.think ? `<button type="button" class="item agent${ui.selected === "agent" ? " on" : ""}" data-id="agent">${kindLabel(lang, "agent")} · ${esc(project.name)}</button>` : "",
     ...project.items.map((item) => {
       const id = `${item.kind}:${item.name}`;
-      return `<button type="button" class="item ${item.kind}${id === ui.selected ? " on" : ""}" data-id="${esc(id)}">${esc(KIND_LABEL[item.kind])} · ${esc(item.name)}</button>`;
+      return `<button type="button" class="item ${item.kind}${id === ui.selected ? " on" : ""}" data-id="${esc(id)}">${esc(kindLabel(lang, item.kind))} · ${esc(item.name)}</button>`;
     }),
   ]
     .filter(Boolean)
     .join("");
-  return `<p class="hint">Drag a component onto the canvas. It stays unconnected until you draw the arrow. A trigger that does not reach Agent answers in code.</p>
+  return `<p class="hint">${t(lang, "palette_hint")}</p>
     <div class="chips">${optional("limits", project.limits)}${optional("think", project.think)}${chips}</div>
-    <h3>On this canvas</h3>
-    ${rows || `<p class="hint">None yet.</p>`}`;
+    <h3>${t(lang, "on_canvas")}</h3>
+    ${rows || `<p class="hint">${t(lang, "none_yet")}</p>`}`;
+}
+
+function langSwitch(lang: Lang): string {
+  return `<div class="langs" role="group" aria-label="${esc(t(lang, "language"))}"><button type="button" data-set-lang="en" class="${lang === "en" ? "on" : ""}">English</button><button type="button" data-set-lang="es" class="${lang === "es" ? "on" : ""}">Español</button></div>`;
 }
 
 export function libraryHtml(project: Project | null, ui: Ui, hasFolder: boolean): string {
+  const lang = langOf(ui);
   const body = !hasFolder
-    ? `<div class="pad"><h2>Canvas</h2><p class="hint">Open the agent folder first.</p></div>`
-    : `<div class="pad"><h2>Canvas</h2><p class="hint">${project ? "Library and properties are on the flow. Hide either tab and the canvas keeps the rest. Hide both and only the flow remains." : "Initialize the folder on the canvas."}</p>
-        <button type="button" id="open" class="primary">Show canvas</button>
-        ${project ? `<div class="row"><button type="button" data-show="library">Show library</button><button type="button" data-show="inspector">Show properties</button></div>` : ""}</div>`;
+    ? `<div class="pad">${langSwitch(lang)}<h2>${t(lang, "canvas")}</h2><p class="hint">${t(lang, "sidebar_closed")}</p></div>`
+    : `<div class="pad">${langSwitch(lang)}<h2>${t(lang, "canvas")}</h2><p class="hint">${project ? t(lang, "sidebar_ready") : t(lang, "sidebar_empty")}</p>
+        <button type="button" id="open" class="primary">${t(lang, "show_canvas")}</button>
+        ${project ? `<div class="row"><button type="button" data-show="library">${t(lang, "show_library")}</button><button type="button" data-show="inspector">${t(lang, "show_properties")}</button></div>` : ""}</div>`;
   return shell(
     `<style>
       body { background: var(--vscode-sideBar-background); }
       .pad { padding: 14px; }
+      .langs { display: flex; gap: 2px; width: fit-content; margin-bottom: 12px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+      .langs button { background: transparent; border-radius: 6px; }
+      .langs button.on { background: var(--vscode-editor-background); outline: 0; }
     </style></head><body>${body}`,
     `const vscode = acquireVsCodeApi();
     document.getElementById("open")?.addEventListener("click", () => vscode.postMessage({ type: "open" }));
     for (const button of document.querySelectorAll("[data-show]")) {
       button.addEventListener("click", () => vscode.postMessage({ type: "chrome", [button.dataset.show + "Open"]: true, focus: true }));
+    }
+    for (const button of document.querySelectorAll("[data-set-lang]")) {
+      button.addEventListener("click", () => {
+        if (button.classList.contains("on")) return;
+        vscode.postMessage({ type: "lang", lang: button.dataset.setLang });
+      });
     }`,
+    lang,
   );
 }
 
@@ -316,6 +325,7 @@ function spot(layout: Layout, home: Layout, id: string): { at: { x: number; y: n
 }
 
 export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, scan?: Scan, suggestedName = "", layout?: Layout, home?: Layout, saved = false, studio?: Studio, ship?: ShipStatus): string {
+  const lang = langOf(ui);
   const channels = project?.items.filter((item) => item.kind === "channel") ?? [];
   const tools = project?.items.filter((item) => item.kind === "tool") ?? [];
   const skills = project?.items.filter((item) => item.kind === "skill") ?? [];
@@ -325,122 +335,135 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   const steps = project && layout ? executionSteps(nodeIds, flowLinks(project, layout)) : {};
   const stepCounts = new Map<number, number>();
   for (const step of Object.values(steps)) stepCounts.set(step, (stepCounts.get(step) || 0) + 1);
-  const badge = (id: string) => stepBadge(steps, stepCounts, id);
+  const badge = (id: string) => stepBadge(steps, stepCounts, id, lang);
   const libraryWidth = Math.min(480, Math.max(200, ui.libraryWidth || 240));
   const inspectorWidth = Math.min(480, Math.max(200, ui.inspectorWidth || 300));
   const flow = project
     ? `<div class="stage">
-        ${ui.libraryOpen !== false ? `<aside class="rail left" style="width:${libraryWidth}px"><header class="railhead"><h2>Library</h2><button type="button" class="hide" data-chrome="library">Hide</button></header><div class="sash" data-sash="library"></div><div class="railbody">${palette(project, ui)}</div></aside>` : `<button type="button" class="tab" data-chrome="library">Show library</button>`}
+        ${ui.libraryOpen !== false ? `<aside class="rail left" style="width:${libraryWidth}px"><header class="railhead"><h2>${t(lang, "library")}</h2><button type="button" class="hide" data-chrome="library">${t(lang, "hide")}</button></header><div class="sash" data-sash="library"></div><div class="railbody">${palette(project, ui)}</div></aside>` : `<button type="button" class="tab" data-chrome="library">${t(lang, "show_library")}</button>`}
         <div class="canvascol">
           <div class="leadrow">
-            <p class="lead" id="lead">The number is the step that arrow enters. The same number can run together. A higher number waits. Ctrl+Z undoes.</p>
-            <div id="saved" class="saved" data-flash="${saved ? "1" : "0"}" title="Moves and edits save to this folder on their own."><svg class="tick" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="saved-label">Saved</span></div>
+            <p class="lead" id="lead">${t(lang, "lead")}</p>
+            <div id="saved" class="saved" data-flash="${saved ? "1" : "0"}" title="${esc(t(lang, "saved_title"))}"><svg class="tick" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="saved-label">${t(lang, "saved")}</span></div>
           </div>
           <div class="board" id="board" data-look="${layout?.look || "clear"}" data-links="${esc(JSON.stringify(project && layout ? flowLinks(project, layout) : []))}" data-steps="${esc(JSON.stringify(steps))}">
             <div class="editbar">
-              <button type="button" id="undo" title="Undo (Ctrl+Z)">Undo</button>
-              <button type="button" id="redo" title="Redo (Ctrl+Y)">Redo</button>
-              <button type="button" id="duplicate" title="${ui.selected === "agent" ? "One Agent per folder. Delegate with a Subagent." : ui.selected === "scope" ? "One Limits card. Leave a trigger unconnected when it should not use it." : "Duplicate (Ctrl+D)"}" ${ui.selected.includes(":") ? "" : "disabled"}>Duplicate</button>
-              <button type="button" id="delete-node" title="${ui.selected === "scope" || ui.selected === "agent" ? "Remove from the canvas. Add it again from the library." : "Delete (Delete)"}" ${ui.selected.includes(":") || ui.selected === "scope" || ui.selected === "agent" ? "" : "disabled"}>Delete</button>
+              <button type="button" id="undo" title="${esc(t(lang, "undo_title"))}">${t(lang, "undo")}</button>
+              <button type="button" id="redo" title="${esc(t(lang, "redo_title"))}">${t(lang, "redo")}</button>
+              <button type="button" id="duplicate" title="${esc(ui.selected === "agent" ? t(lang, "duplicate_agent") : ui.selected === "scope" ? t(lang, "duplicate_limits") : t(lang, "duplicate_title"))}" ${ui.selected.includes(":") ? "" : "disabled"}>${t(lang, "duplicate")}</button>
+              <button type="button" id="delete-node" title="${esc(ui.selected === "scope" || ui.selected === "agent" ? t(lang, "delete_card") : t(lang, "delete_title"))}" ${ui.selected.includes(":") || ui.selected === "scope" || ui.selected === "agent" ? "" : "disabled"}>${t(lang, "delete")}</button>
             </div>
             <div class="surface" id="surface" style="width:${Math.max(1200, ...Object.values(layout?.positions || { a: { x: 0 } }).map((point) => point.x + 280))}px;height:${Math.max(720, ...Object.values(layout?.positions || { a: { y: 0 } }).map((point) => point.y + 200))}px;transform:translate(${layout?.pan.x || 24}px,${layout?.pan.y || 16}px) scale(${layout?.zoom || 1})">
               <svg id="wires"></svg>
-              ${channels.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `channel:${item.name}`).at, spot(layout!, home!, `channel:${item.name}`).origin, gaps.has(`channel:${item.name}`), badge(`channel:${item.name}`))).join("")}
-              ${project.limits ? (() => { const place = spot(layout!, home!, "scope"); return `<button type="button" class="node scope ${ui.selected === "scope" ? "on" : ""}" data-id="scope" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("scope")}<span class="mark">${icon("limits")}</span><span class="copy"><span class="k">Limits</span><strong>Scope</strong><em>${esc((project.scope || "What it must refuse").replace(/\s+/g, " ").slice(0, 90))}</em></span></button>`; })() : ""}
-              ${project.think ? (() => { const place = spot(layout!, home!, "agent"); const model = project.model === "fast" ? "Fast" : project.model === "strong" ? "Strong" : "Auto"; return `<button type="button" class="node agent ${ui.selected === "agent" ? "on" : ""}" data-id="agent" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("agent")}<span class="mark">${icon("agent")}</span><span class="copy"><span class="k">Agent</span><strong>${esc(project.name)}</strong><em>${model}</em></span></button>`; })() : ""}
-              ${tools.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `tool:${item.name}`).at, spot(layout!, home!, `tool:${item.name}`).origin, gaps.has(`tool:${item.name}`), badge(`tool:${item.name}`))).join("")}
-              ${skills.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `skill:${item.name}`).at, spot(layout!, home!, `skill:${item.name}`).origin, gaps.has(`skill:${item.name}`), badge(`skill:${item.name}`))).join("")}
-              ${(project.items.filter((item) => item.kind === "schedule")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `schedule:${item.name}`).at, spot(layout!, home!, `schedule:${item.name}`).origin, gaps.has(`schedule:${item.name}`), badge(`schedule:${item.name}`))).join("")}
-              ${(project.items.filter((item) => item.kind === "subagent")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `subagent:${item.name}`).at, spot(layout!, home!, `subagent:${item.name}`).origin, gaps.has(`subagent:${item.name}`), badge(`subagent:${item.name}`))).join("")}
-              ${(project.items.filter((item) => item.kind === "hook")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `hook:${item.name}`).at, spot(layout!, home!, `hook:${item.name}`).origin, gaps.has(`hook:${item.name}`), badge(`hook:${item.name}`))).join("")}
-              ${mcps.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `mcp:${item.name}`).at, spot(layout!, home!, `mcp:${item.name}`).origin, gaps.has(`mcp:${item.name}`), badge(`mcp:${item.name}`))).join("")}
-              ${(project.items.filter((item) => item.kind === "host")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `host:${item.name}`).at, spot(layout!, home!, `host:${item.name}`).origin, gaps.has(`host:${item.name}`), badge(`host:${item.name}`))).join("")}
+              ${channels.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `channel:${item.name}`).at, spot(layout!, home!, `channel:${item.name}`).origin, gaps.has(`channel:${item.name}`), badge(`channel:${item.name}`, lang))).join("")}
+              ${project.limits ? (() => { const place = spot(layout!, home!, "scope"); return `<button type="button" class="node scope ${ui.selected === "scope" ? "on" : ""}" data-id="scope" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("scope")}<span class="mark">${icon("limits")}</span><span class="copy"><span class="k">${kindLabel(lang, "limits")}</span><strong>${t(lang, "scope_name")}</strong><em>${esc((project.scope || t(lang, "scope_fallback")).replace(/\s+/g, " ").slice(0, 90))}</em></span></button>`; })() : ""}
+              ${project.think ? (() => { const place = spot(layout!, home!, "agent"); const model = project.model === "fast" ? t(lang, "fast_model") : project.model === "strong" ? t(lang, "strong_model") : t(lang, "auto_model"); return `<button type="button" class="node agent ${ui.selected === "agent" ? "on" : ""}" data-id="agent" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("agent")}<span class="mark">${icon("agent")}</span><span class="copy"><span class="k">${kindLabel(lang, "agent")}</span><strong>${esc(project.name)}</strong><em>${model}</em></span></button>`; })() : ""}
+              ${tools.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `tool:${item.name}`).at, spot(layout!, home!, `tool:${item.name}`).origin, gaps.has(`tool:${item.name}`), badge(`tool:${item.name}`, lang))).join("")}
+              ${skills.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `skill:${item.name}`).at, spot(layout!, home!, `skill:${item.name}`).origin, gaps.has(`skill:${item.name}`), badge(`skill:${item.name}`, lang))).join("")}
+              ${(project.items.filter((item) => item.kind === "schedule")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `schedule:${item.name}`).at, spot(layout!, home!, `schedule:${item.name}`).origin, gaps.has(`schedule:${item.name}`), badge(`schedule:${item.name}`, lang))).join("")}
+              ${(project.items.filter((item) => item.kind === "subagent")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `subagent:${item.name}`).at, spot(layout!, home!, `subagent:${item.name}`).origin, gaps.has(`subagent:${item.name}`), badge(`subagent:${item.name}`, lang))).join("")}
+              ${(project.items.filter((item) => item.kind === "hook")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `hook:${item.name}`).at, spot(layout!, home!, `hook:${item.name}`).origin, gaps.has(`hook:${item.name}`), badge(`hook:${item.name}`, lang))).join("")}
+              ${mcps.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `mcp:${item.name}`).at, spot(layout!, home!, `mcp:${item.name}`).origin, gaps.has(`mcp:${item.name}`), badge(`mcp:${item.name}`, lang))).join("")}
+              ${(project.items.filter((item) => item.kind === "host")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `host:${item.name}`).at, spot(layout!, home!, `host:${item.name}`).origin, gaps.has(`host:${item.name}`), badge(`host:${item.name}`, lang))).join("")}
             </div>
             <div class="dock">
-              <button type="button" id="zoom-out" title="Zoom out">−</button>
-              <button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4" fill="none" stroke="currentColor"/><path d="M9.5 9.5 L13 13 M6.5 4.8 V8.2 M4.8 6.5 H8.2" stroke="currentColor" fill="none"/></svg></button>
-              <button type="button" id="zoom-fit" title="Fit the flow">Fit</button>
-              <button type="button" id="connect" title="Connect two components">Connect</button>
+              <button type="button" id="zoom-out" title="${esc(t(lang, "zoom_out"))}">−</button>
+              <button type="button" id="zoom-in" title="${esc(t(lang, "zoom_in"))}" aria-label="${esc(t(lang, "zoom_in"))}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4" fill="none" stroke="currentColor"/><path d="M9.5 9.5 L13 13 M6.5 4.8 V8.2 M4.8 6.5 H8.2" stroke="currentColor" fill="none"/></svg></button>
+              <button type="button" id="zoom-fit" title="${esc(t(lang, "fit_title"))}">${t(lang, "fit")}</button>
+              <button type="button" id="connect" title="${esc(t(lang, "connect_two_title"))}">${t(lang, "connect_two")}</button>
               <span id="zoom-label">${Math.round((layout?.zoom || 1) * 100)}%</span>
-              <button type="button" id="look-btn" title="Contrast">Look</button>
-              <button type="button" id="reset-layout" title="Restore the reading order">Reset</button>
+              <button type="button" id="look-btn" title="${esc(t(lang, "look_title"))}">${t(lang, "look")}</button>
+              <button type="button" id="reset-layout" title="${esc(t(lang, "reset_title"))}">${t(lang, "reset")}</button>
             </div>
             <div id="look-menu" class="look" hidden>
-              <button type="button" data-look="soft">Soft</button>
-              <button type="button" data-look="clear">Clear</button>
-              <button type="button" data-look="contrast">Contrast</button>
+              <button type="button" data-look="soft">${t(lang, "look_soft")}</button>
+              <button type="button" data-look="clear">${t(lang, "look_clear")}</button>
+              <button type="button" data-look="contrast">${t(lang, "look_contrast")}</button>
             </div>
           </div>
         </div>
-        ${ui.inspectorOpen !== false ? `<aside class="rail right" style="width:${inspectorWidth}px"><div class="sash" data-sash="inspector"></div><header class="railhead"><button type="button" class="hide" data-chrome="inspector">Hide</button><h2>Properties</h2></header><div class="railbody">${inspector(project, ui.selected)}</div></aside>` : `<button type="button" class="tab right" data-chrome="inspector">Show properties</button>`}
+        ${ui.inspectorOpen !== false ? `<aside class="rail right" style="width:${inspectorWidth}px"><div class="sash" data-sash="inspector"></div><header class="railhead"><button type="button" class="hide" data-chrome="inspector">${t(lang, "hide")}</button><h2>${t(lang, "properties")}</h2></header><div class="railbody">${inspector(project, ui.selected, lang)}</div></aside>` : `<button type="button" class="tab right" data-chrome="inspector">${t(lang, "show_properties")}</button>`}
       </div>`
     : "";
   const secrets = project
-    ? `<div class="sheet"><p class="kicker">Names travel. Values do not.</p><h2>Secrets</h2><p class="hint">The image never contains a value. Local reads .env. Later, each cloud store injects the same name.</p>
-        <ul class="secrets">${project.secrets.map((secret) => `<li><strong>${esc(secret.name)}</strong><span>${secret.configured ? "Set locally" : "Empty"}</span></li>`).join("") || `<li class="hint">No names yet.</li>`}</ul>
-        <label>Name<input id="secret-name" placeholder="CURSOR_API_KEY" /></label>
-        <label>Value<input id="secret-value" type="password" autocomplete="off" /></label>
-        <div class="row"><button type="button" id="save-secret" class="primary">Save secret</button></div></div>`
+    ? `<div class="sheet"><p class="kicker">${t(lang, "secrets_kicker")}</p><h2>${t(lang, "secrets")}</h2><p class="hint">${t(lang, "secrets_hint")}</p>
+        <ul class="secrets">${project.secrets.map((secret) => `<li><strong>${esc(secret.name)}</strong><span>${secret.configured ? t(lang, "set_locally") : t(lang, "empty")}</span></li>`).join("") || `<li class="hint">${t(lang, "no_names")}</li>`}</ul>
+        <label>${t(lang, "name")}<input id="secret-name" placeholder="CURSOR_API_KEY" /></label>
+        <label>${t(lang, "value")}<input id="secret-value" type="password" autocomplete="off" /></label>
+        <div class="row"><button type="button" id="save-secret" class="primary">${t(lang, "save_secret")}</button></div></div>`
     : "";
   const local = ship ?? { docker: "unknown" as const, running: false, phase: "idle" as const, summary: "Checking this machine.", logs: "", publicUrl: "" };
   const busy = local.phase !== "idle";
-  const localLabel = local.phase === "building" ? "Building" : local.phase === "rebuilding" ? "Rebuilding" : local.phase === "stopping" ? "Stopping" : local.phase === "checking" ? "Checking" : local.phase === "tunnel" ? "Opening tunnel" : local.phase === "webhook" ? "Registering" : local.docker === "down" ? "Docker off" : local.running ? "Running" : "Stopped";
+  const localLabel = local.phase === "building" ? t(lang, "building") : local.phase === "rebuilding" ? t(lang, "rebuilding") : local.phase === "stopping" ? t(lang, "stopping") : local.phase === "checking" ? t(lang, "checking") : local.phase === "tunnel" ? t(lang, "opening_tunnel") : local.phase === "webhook" ? t(lang, "registering") : local.docker === "down" ? t(lang, "docker_off") : local.running ? t(lang, "running") : t(lang, "stopped");
   const delivery = project ? deliveryCheck(project.root) : [];
   const telegram = project?.items.some((item) => item.kind === "channel" && item.description === "telegram") ?? false;
   const telegramProblems = project && telegram ? telegramReach(project.root) : [];
   const problems = project
     ? [
-        ...delivery.map((finding) => finding.message),
-        ...telegramProblems.map((finding) => finding.message),
-        ...review(project).map((finding) => finding.message),
-        ...project.secrets.filter((secret) => !secret.configured).map((secret) => `${secret.name} is empty. Set it in Secrets.`),
+        ...delivery.map((finding) => phrase(lang, finding.message)),
+        ...telegramProblems.map((finding) => phrase(lang, finding.message)),
+        ...review(project).map((finding) => phrase(lang, finding.message)),
+        ...project.secrets.filter((secret) => !secret.configured).map((secret) => phrase(lang, `${secret.name} is empty. Set it in Secrets.`)),
       ]
     : [];
   const deploy = project
-    ? `<div class="sheet fill"><p class="kicker">One image. Four places.</p><h2>Ship</h2><p class="hint">Local runs on this machine. The other places use the same image later.</p>
-        <div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span class="statusline">${busy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(localLabel)}</span></span><strong>Local</strong></header><p>${esc(local.summary)}</p><p class="path">${local.running ? "Playground is ready" : "Playground, after Start"} · http://127.0.0.1:3000/playground</p>
-          <div class="row"><button type="button" id="ship-start" class="primary" ${local.docker === "down" || busy || delivery.length ? "disabled" : ""}>Start</button><button type="button" id="open-playground" ${local.running && !busy ? "" : "disabled"}>Open playground</button><button type="button" id="ship-rebuild" ${local.docker === "down" || busy || delivery.length ? "disabled" : ""}>Rebuild</button><button type="button" id="ship-stop" ${local.running || local.phase === "building" || local.phase === "rebuilding" ? "" : "disabled"}>Stop</button><button type="button" id="ship-refresh" ${busy ? "disabled" : ""}>Refresh</button><button type="button" id="ship-logs">Follow logs</button></div>
-          <p class="hint">Rebuild forces a new image and a new container so the agent reads the current .env. Secret values stay out of the image. This machine is admitted because Docker is not loopback. A public tunnel reaches the same port, so close it when the test is done.</p>
-          ${delivery.length ? `<p class="hint">Start and Rebuild stay off until this folder is one that agent-sdk serve can load.</p>` : ""}
+    ? `<div class="sheet fill"><p class="kicker">${t(lang, "one_image")}</p><h2>${t(lang, "ship")}</h2><p class="hint">${t(lang, "ship_hint")}</p>
+        <div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span class="statusline">${busy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(localLabel)}</span></span><strong>${t(lang, "local")}</strong></header><p>${esc(phrase(lang, local.summary))}</p><p class="path">${local.running ? t(lang, "playground_ready") : t(lang, "playground_after")} · http://127.0.0.1:3000/playground</p>
+          <div class="row"><button type="button" id="ship-start" class="primary" ${local.docker === "down" || busy || delivery.length ? "disabled" : ""}>${t(lang, "start")}</button><button type="button" id="open-playground" ${local.running && !busy ? "" : "disabled"}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${local.docker === "down" || busy || delivery.length ? "disabled" : ""}>${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${local.running || local.phase === "building" || local.phase === "rebuilding" ? "" : "disabled"}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${busy ? "disabled" : ""}>${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
+          <p class="hint">${t(lang, "rebuild_hint")}</p>
+          ${delivery.length ? `<p class="hint">${t(lang, "start_off")}</p>` : ""}
         </div>
         <div class="destinations">
-          <article class="env"><header><span>Same image</span><strong>Kubernetes</strong></header><p>ConfigMap for plain values. A Secret for the sensitive ones.</p></article>
-          <article class="env"><header><span>Same image</span><strong>AWS</strong></header><p>Secrets Manager, injected into the ECS or Fargate task.</p></article>
-          <article class="env"><header><span>Same image</span><strong>GCP</strong></header><p>Secret Manager, injected into Cloud Run.</p></article>
-          <article class="env"><header><span>Same image</span><strong>Azure</strong></header><p>Key Vault, referenced from Container Apps.</p></article>
+          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>${t(lang, "k8s")}</strong></header><p>${t(lang, "k8s_p")}</p></article>
+          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>AWS</strong></header><p>${t(lang, "aws_p")}</p></article>
+          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>GCP</strong></header><p>${t(lang, "gcp_p")}</p></article>
+          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>Azure</strong></header><p>${t(lang, "azure_p")}</p></article>
         </div>
-        ${problems.length ? `<ul class="work">${problems.map((problem) => `<li><p>${esc(problem)}</p></li>`).join("")}</ul>` : `<p class="hint">No problems in the folder.</p>`}
-        <pre id="ship-log" class="log">${esc(local.logs || "No log yet.")}</pre>
-        <p class="hint">Start builds the image and runs it in the background. Follow logs opens a live terminal. Secret values are hidden.</p>
-        <div class="row"><button type="button" id="rewrite-docker">Rewrite local Docker files</button><button type="button" id="run-validate">Check project</button><button type="button" id="run-evals">Run evals</button></div></div>`
+        ${problems.length ? `<ul class="work">${problems.map((problem) => `<li><p>${esc(problem)}</p></li>`).join("")}</ul>` : `<p class="hint">${t(lang, "no_problems")}</p>`}
+        <pre id="ship-log" class="log">${esc(local.logs || t(lang, "no_log"))}</pre>
+        <p class="hint">${t(lang, "ship_foot")}</p>
+        <div class="row"><button type="button" id="rewrite-docker">${t(lang, "rewrite_docker")}</button><button type="button" id="run-validate">${t(lang, "check_project")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div></div>`
     : "";
   const otherChannels = project ? project.items.filter((item) => item.kind === "channel" && item.description !== "telegram") : [];
   const connect = project
-    ? `<div class="sheet fill"><p class="kicker">Outside services</p><h2>Connect</h2><p class="hint">Each channel on the canvas gets its setup here. Secrets keep the values. Ship runs the image.</p>
-        ${telegram ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>From this chat</span><strong>Telegram</strong></header><p>Paste the https address of the tunnel, or open one. Register restarts the local agent so it reads the current secret, then tells Telegram where to call. The token stays in .env and is not shown.</p><label>Public address<input id="public-url" value="${esc(local.publicUrl)}" placeholder="https://name.trycloudflare.com" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="ship-tunnel" ${busy ? "disabled" : ""}>Open tunnel</button><button type="button" id="ship-webhook" class="primary" ${busy || !local.running || telegramProblems.length ? "disabled" : ""}>Register webhook</button></div>${telegramProblems.length ? `<p class="hint">Register stays off until the Telegram secret and token match what Telegram accepts. Change them in Secrets, then come back.</p>` : ""}</div>` : `<p class="hint">Add a channel on the canvas. Its setup card appears here.</p>`}
-        ${otherChannels.map((item) => `<article class="env"><header><span>Channel</span><strong>${esc(item.name)}</strong></header><p>No setup step for this channel yet. When the platform can register it, the action goes on this page.</p></article>`).join("")}
-        ${telegramProblems.length ? `<ul class="work">${telegramProblems.map((finding) => `<li><p>${esc(finding.message)}</p></li>`).join("")}</ul>` : ""}</div>`
+    ? `<div class="sheet fill"><p class="kicker">${t(lang, "outside")}</p><h2>${t(lang, "connect")}</h2><p class="hint">${t(lang, "connect_hint")}</p>
+        ${telegram ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>Telegram</strong></header><p>${t(lang, "telegram_setup")}</p><label>${t(lang, "public_address")}<input id="public-url" value="${esc(local.publicUrl)}" placeholder="https://name.trycloudflare.com" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="ship-tunnel" ${busy ? "disabled" : ""}>${t(lang, "open_tunnel")}</button><button type="button" id="ship-webhook" class="primary" ${busy || !local.running || telegramProblems.length ? "disabled" : ""}>${t(lang, "register_webhook")}</button></div>${telegramProblems.length ? `<p class="hint">${t(lang, "register_off")}</p>` : ""}</div>` : `<p class="hint">${t(lang, "add_channel")}</p>`}
+        ${otherChannels.map((item) => `<article class="env"><header><span>${t(lang, "channel")}</span><strong>${esc(item.name)}</strong></header><p>${t(lang, "channel_later")}</p></article>`).join("")}
+        ${telegramProblems.length ? `<ul class="work">${telegramProblems.map((finding) => `<li><p>${esc(phrase(lang, finding.message))}</p></li>`).join("")}</ul>` : ""}</div>`
     : "";
   const prove = project
-    ? `<div class="sheet wide"><p class="kicker">Fixed cases</p><h2>Prove</h2><p class="hint">A case sends one prompt and checks the trajectory. The file opens in the editor, so the suite stays TypeScript.</p>
-        <ul class="work">${(studio?.evals || []).map((suite) => `<li><div><strong>${esc(suite.file)}</strong><p class="hint">${suite.cases.length ? esc(suite.cases.join(", ")) : "No case id yet."}</p></div><button type="button" data-open="${esc(suite.file)}">Open</button></li>`).join("") || `<li class="hint">No eval files yet.</li>`}</ul>
-        <form id="eval-form"><label>Case id<input name="name" placeholder="in-scope" required /></label><label>Prompt<textarea name="prompt" placeholder="How do I reset my password?"></textarea></label><label>Check<select name="check"><option value="lookup">Must look up a passage</option><option value="no-escalate">Must look up, and not escalate</option></select></label><div class="row"><button type="submit" class="primary">Add case</button><button type="button" id="run-evals">Run evals</button></div></form></div>`
+    ? `<div class="sheet wide"><p class="kicker">${t(lang, "fixed_cases")}</p><h2>${t(lang, "prove")}</h2><p class="hint">${t(lang, "prove_hint")}</p>
+        <ul class="work">${(studio?.evals || []).map((suite) => `<li><div><strong>${esc(suite.file)}</strong><p class="hint">${suite.cases.length ? esc(suite.cases.join(", ")) : t(lang, "no_case")}</p></div><button type="button" data-open="${esc(suite.file)}">${t(lang, "open_file")}</button></li>`).join("") || `<li class="hint">${t(lang, "no_eval")}</li>`}</ul>
+        <form id="eval-form"><label>${t(lang, "case_id")}<input name="name" placeholder="in-scope" required /></label><label>${t(lang, "prompt")}<textarea name="prompt" placeholder="How do I reset my password?"></textarea></label><label>${t(lang, "check")}<select name="check"><option value="lookup">${t(lang, "must_lookup")}</option><option value="no-escalate">${t(lang, "must_not")}</option></select></label><div class="row"><button type="submit" class="primary">${t(lang, "add_case")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div></form></div>`
     : "";
   const platform = project
-    ? `<div class="sheet wide"><p class="kicker">Outside the drawing</p><h2>Platform</h2><p class="hint">These are files, not steps. Open one and the editor keeps the language service. Create only writes what is missing.</p>
-        <ul class="work">${(studio?.files || []).map((file) => `<li><div><strong>${esc(file.title)}</strong><p class="hint">${esc(file.detail)}</p><p class="path">${esc(file.path)}</p></div><button type="button" data-open="${esc(file.path)}" data-create="${esc(file.id)}">${file.present ? "Open" : "Create"}</button></li>`).join("")}</ul></div>`
+    ? `<div class="sheet wide"><p class="kicker">${t(lang, "outside_drawing")}</p><h2>${t(lang, "platform")}</h2><p class="hint">${t(lang, "platform_hint")}</p>
+        <ul class="work">${(studio?.files || []).map((file) => { const label = studioText(lang, file); return `<li><div><strong>${esc(label.title)}</strong><p class="hint">${esc(label.detail)}</p><p class="path">${esc(file.path)}</p></div><button type="button" data-open="${esc(file.path)}" data-create="${esc(file.id)}">${file.present ? t(lang, "open_file") : t(lang, "create_file")}</button></li>`; }).join("")}</ul></div>`
     : "";
   const checklist = scan
     ? `<ul class="scan">${scan.found.map((piece) => `<li class="ok">${esc(piece.label)}</li>`).join("")}${scan.missing.map((piece) => `<li class="miss">${esc(piece.label)}</li>`).join("")}</ul>`
     : "";
   const repair =
     project && scan && scan.missing.length > 0
-      ? `<p class="banner">Missing ${esc(scan.missing.map((piece) => piece.label).join(", "))}. <button type="button" id="repair">Repair</button></p>`
+      ? `<p class="banner">${t(lang, "missing")} ${esc(scan.missing.map((piece) => piece.label).join(", "))}. <button type="button" id="repair">${t(lang, "repair")}</button></p>`
       : "";
+  const examplesPage = `<div class="sheet fill"><p class="kicker">${t(lang, "examples_kicker")}</p><h2>${t(lang, "examples")}</h2><p class="hint">${t(lang, "examples_hint")}</p>
+        <div class="row"><button type="button" id="open-guide" class="primary">${t(lang, "open_guide")}</button></div>
+        <div class="row"><button type="button" id="keep-folder">${t(lang, "keep_folder")}</button><button type="button" id="restore-folder">${t(lang, "restore_folder")}</button></div>
+        ${EXAMPLES.map((example) => { const label = exampleText(lang, example); return `<article class="env"><header><span>${esc(label.level)}</span><strong>${esc(example.title)}</strong></header><p>${esc(label.summary)}</p><div class="row"><button type="button" class="primary" data-example="${esc(example.id)}">${t(lang, "load")}</button></div></article>`; }).join("")}</div>`;
+  const help = `<div id="help" class="help"${ui.helpOpen ? "" : " hidden"}><div class="helpcard" role="dialog" aria-labelledby="help-title"><header><strong id="help-title">${t(lang, "help_title")}</strong><button type="button" id="help-close">${t(lang, "close")}</button></header>
+      <h3>${t(lang, "help_path_h")}</h3><ol class="path"><li><strong>${t(lang, "path1_h")}</strong>${t(lang, "path1")}</li><li><strong>${t(lang, "path2_h")}</strong>${t(lang, "path2")}</li><li><strong>${t(lang, "path3_h")}</strong>${t(lang, "path3")}</li><li><strong>${t(lang, "path4_h")}</strong>${t(lang, "path4")}</li><li><strong>${t(lang, "path5_h")}</strong>${t(lang, "path5")}</li></ol>
+      <h3>${t(lang, "help_need_h")}</h3><p>${t(lang, "help_key")}</p><p>${t(lang, "help_docker")}</p>
+      <h3>${t(lang, "help_sdk_h")}</h3><p>${t(lang, "help_sdk")}</p>
+      <h3>${t(lang, "help_what_h")}</h3><p>${t(lang, "help_what")}</p>
+      <h3>${t(lang, "help_where_h")}</h3><ul class="where"><li>${t(lang, "where_design")}</li><li>${t(lang, "where_secrets")}</li><li>${t(lang, "where_connect")}</li><li>${t(lang, "where_ship")}</li><li>${t(lang, "where_examples")}</li></ul>
+      <div class="row"><button type="button" id="help-guide" class="primary">${t(lang, "open_guide")}</button></div></div></div>`;
   const body = !hasFolder
-    ? `<div class="empty"><h2>Open a folder</h2><p class="hint">The canvas reads the folder you have open.</p></div>`
-    : !project
-      ? `<form id="create-form" class="empty"><h2>Initialize workspace</h2><p class="hint">${scan && scan.found.length ? "Some agent files are already here. Initialize adds only what is missing." : "This folder has no agent files yet."}</p>${checklist}<label>Name<input name="name" value="${esc(suggestedName)}" required /></label><div class="row"><button type="submit" class="primary">Initialize workspace</button></div></form>`
+    ? `<div class="empty"><h2>${t(lang, "open_folder")}</h2><p class="hint">${t(lang, "open_folder_hint")}</p></div>`
+    : ui.mode === "examples"
+      ? examplesPage
+      : !project
+      ? `<form id="create-form" class="empty"><h2>${t(lang, "init_title")}</h2><p class="hint">${scan && scan.found.length ? t(lang, "init_keep") : t(lang, "init_empty")}</p><p class="path">${esc(lang === "es" ? GUIDE_URL_ES : GUIDE_URL)}</p>${checklist}<label>${t(lang, "name")}<input name="name" value="${esc(suggestedName)}" required /></label><div class="row"><button type="submit" class="primary">${t(lang, "init_button")}</button><button type="button" id="open-guide">${t(lang, "open_guide")}</button></div></form>`
       : ui.mode === "prove"
         ? prove
         : ui.mode === "platform"
@@ -460,7 +483,23 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   return shell(
     `<style>
       header.bar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.28)); }
-      header.bar strong { margin-right: auto; font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+      header.bar strong { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+      .bar-end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+      .langs { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
+      .langs button { background: transparent; border-radius: 6px; font-weight: 600; }
+      .langs button.on { background: var(--vscode-editor-background); outline: 0; }
+      .helpbtn { font-weight: 600; }
+      .help { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: flex-end; background: color-mix(in srgb, #000 28%, transparent); }
+      .help[hidden] { display: none; }
+      .helpcard { width: min(440px, 100%); height: 100%; overflow: auto; box-sizing: border-box; padding: 16px 18px 32px; background: var(--vscode-editor-background); border-left: 1px solid var(--vscode-widget-border, rgba(128,128,128,.4)); }
+      .helpcard header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .helpcard header strong { margin-right: auto; font-size: 16px; }
+      .helpcard h3 { margin: 18px 0 6px; }
+      .helpcard p, .helpcard li { font-size: 13px; line-height: 1.5; }
+      ol.path { margin: 8px 0 0; padding-left: 1.2rem; }
+      ol.path li { margin: 10px 0; }
+      ol.path strong { display: block; }
+      ul.where { margin: 8px 0 0; padding-left: 1.2rem; }
       .modes { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); flex-wrap: wrap; }
       .modes button { background: transparent; border-radius: 6px; }
       .modes button.on { background: var(--vscode-editor-background); outline: 0; }
@@ -582,12 +621,30 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     </style></head><body>
       <header class="bar">
         <strong>${project ? esc(project.name) : "BigAgentCreator"}</strong>
-        ${project ? `<div class="modes"><button type="button" data-mode="flow" class="${ui.mode === "flow" ? "on" : ""}">Design</button><button type="button" data-mode="prove" class="${ui.mode === "prove" ? "on" : ""}">Prove</button><button type="button" data-mode="platform" class="${ui.mode === "platform" ? "on" : ""}">Platform</button><button type="button" data-mode="secrets" class="${ui.mode === "secrets" ? "on" : ""}">Secrets</button><button type="button" data-mode="connect" class="${ui.mode === "connect" ? "on" : ""}">Connect</button><button type="button" data-mode="deploy" class="${ui.mode === "deploy" ? "on" : ""}">Ship</button></div>` : ""}
+        ${hasFolder ? `<div class="modes">${project ? `<button type="button" data-mode="flow" class="${ui.mode === "flow" ? "on" : ""}">${t(lang, "design")}</button><button type="button" data-mode="prove" class="${ui.mode === "prove" ? "on" : ""}">${t(lang, "prove")}</button><button type="button" data-mode="platform" class="${ui.mode === "platform" ? "on" : ""}">${t(lang, "platform")}</button><button type="button" data-mode="secrets" class="${ui.mode === "secrets" ? "on" : ""}">${t(lang, "secrets")}</button><button type="button" data-mode="connect" class="${ui.mode === "connect" ? "on" : ""}">${t(lang, "connect")}</button><button type="button" data-mode="deploy" class="${ui.mode === "deploy" ? "on" : ""}">${t(lang, "ship")}</button>` : ""}<button type="button" data-mode="examples" class="${ui.mode === "examples" ? "on" : ""}">${t(lang, "examples")}</button></div>` : ""}
+        <div class="bar-end">${langSwitch(lang)}<button type="button" id="help-open" class="helpbtn">${t(lang, "help")}</button></div>
       </header>
       ${ui.notice ? `<p class="banner">${esc(ui.notice)}</p>` : ""}${repair}
-      <main>${body}</main>`,
+      <main>${body}</main>${help}`,
     `const vscode = acquireVsCodeApi();
     const state = ${data};
+    const uiText = ${JSON.stringify({
+      saved: t(lang, "saved"),
+      copied: t(lang, "copied"),
+      noLog: t(lang, "no_log"),
+      clickFirst: t(lang, "click_first"),
+      clickNext: t(lang, "click_next"),
+      building: t(lang, "building"),
+      rebuilding: t(lang, "rebuilding"),
+      stopping: t(lang, "stopping"),
+      checking: t(lang, "checking"),
+      opening: t(lang, "opening_tunnel"),
+      registering: t(lang, "registering"),
+      phName: t(lang, "ph_name"),
+      required: t(lang, "required"),
+      phMeans: t(lang, "ph_means"),
+      remove: t(lang, "remove"),
+    }).replace(/</g, "\\u003c")};
     document.getElementById("create-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
       vscode.postMessage({ type: "create", name: new FormData(event.target).get("name") });
@@ -605,14 +662,31 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     });
     document.getElementById("run-evals")?.addEventListener("click", () => vscode.postMessage({ type: "task", task: "eval" }));
     document.getElementById("run-validate")?.addEventListener("click", () => vscode.postMessage({ type: "task", task: "validate" }));
-    document.getElementById("ship-start")?.addEventListener("click", () => { arm("Building"); vscode.postMessage({ type: "ship", task: "start" }); });
-    document.getElementById("ship-rebuild")?.addEventListener("click", () => { arm("Rebuilding"); vscode.postMessage({ type: "ship", task: "rebuild" }); });
-    document.getElementById("ship-stop")?.addEventListener("click", () => { arm("Stopping"); vscode.postMessage({ type: "ship", task: "stop" }); });
-    document.getElementById("ship-refresh")?.addEventListener("click", () => { arm("Checking"); vscode.postMessage({ type: "ship", task: "refresh" }); });
+    document.getElementById("ship-start")?.addEventListener("click", () => { arm(uiText.building); vscode.postMessage({ type: "ship", task: "start" }); });
+    document.getElementById("ship-rebuild")?.addEventListener("click", () => { arm(uiText.rebuilding); vscode.postMessage({ type: "ship", task: "rebuild" }); });
+    document.getElementById("ship-stop")?.addEventListener("click", () => { arm(uiText.stopping); vscode.postMessage({ type: "ship", task: "stop" }); });
+    document.getElementById("ship-refresh")?.addEventListener("click", () => { arm(uiText.checking); vscode.postMessage({ type: "ship", task: "refresh" }); });
     document.getElementById("ship-logs")?.addEventListener("click", () => vscode.postMessage({ type: "ship", task: "follow" }));
     document.getElementById("open-playground")?.addEventListener("click", () => vscode.postMessage({ type: "ship", task: "playground" }));
-    document.getElementById("ship-tunnel")?.addEventListener("click", () => { arm("Opening tunnel"); vscode.postMessage({ type: "ship", task: "tunnel" }); });
-    document.getElementById("ship-webhook")?.addEventListener("click", () => { arm("Registering"); vscode.postMessage({ type: "ship", task: "webhook", url: document.getElementById("public-url")?.value || "" }); });
+    for (const button of document.querySelectorAll("[data-example]")) {
+      button.addEventListener("click", () => vscode.postMessage({ type: "load-example", id: button.dataset.example }));
+    }
+    document.getElementById("open-guide")?.addEventListener("click", () => vscode.postMessage({ type: "open-guide" }));
+    document.getElementById("help-guide")?.addEventListener("click", () => vscode.postMessage({ type: "open-guide" }));
+    document.getElementById("help-open")?.addEventListener("click", () => { const box = document.getElementById("help"); if (box) box.hidden = false; });
+    document.getElementById("help-close")?.addEventListener("click", () => { const box = document.getElementById("help"); if (box) box.hidden = true; });
+    document.getElementById("help")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) event.currentTarget.hidden = true; });
+    for (const button of document.querySelectorAll("[data-set-lang]")) {
+      button.addEventListener("click", () => {
+        if (button.classList.contains("on")) return;
+        const box = document.getElementById("help");
+        vscode.postMessage({ type: "lang", lang: button.dataset.setLang, helpOpen: Boolean(box && !box.hidden) });
+      });
+    }
+    document.getElementById("keep-folder")?.addEventListener("click", () => vscode.postMessage({ type: "keep-folder" }));
+    document.getElementById("restore-folder")?.addEventListener("click", () => vscode.postMessage({ type: "restore-folder" }));
+    document.getElementById("ship-tunnel")?.addEventListener("click", () => { arm(uiText.opening); vscode.postMessage({ type: "ship", task: "tunnel" }); });
+    document.getElementById("ship-webhook")?.addEventListener("click", () => { arm(uiText.registering); vscode.postMessage({ type: "ship", task: "webhook", url: document.getElementById("public-url")?.value || "" }); });
     function arm(label) {
       const line = document.querySelector(".localbar .statusline");
       if (line && !line.querySelector(".spin")) {
@@ -639,7 +713,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         if (!connectFrom) {
           connectFrom = target;
           const lead = document.getElementById("lead");
-          if (lead) lead.textContent = "Now click the component it should reach.";
+          if (lead) lead.textContent = uiText.clickNext;
           return;
         }
         if (connectFrom !== target) vscode.postMessage({ type: "link", from: connectFrom, to: target });
@@ -670,7 +744,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       if (!box) return;
       const row = document.createElement("div");
       row.className = "param";
-      row.innerHTML = '<input name="pname" placeholder="name" /><select name="ptype"><option>string</option><option>number</option><option>boolean</option></select><label class="check"><input name="preq" type="checkbox" /> required</label><input name="pdesc" placeholder="what it means" /><button type="button" class="quiet drop-param">Remove</button>';
+      row.innerHTML = '<input name="pname" placeholder="' + uiText.phName + '" /><select name="ptype"><option>string</option><option>number</option><option>boolean</option></select><label class="check"><input name="preq" type="checkbox" /> ' + uiText.required + '</label><input name="pdesc" placeholder="' + uiText.phMeans + '" /><button type="button" class="quiet drop-param">' + uiText.remove + '</button>';
       box.appendChild(row);
     });
     document.getElementById("params")?.addEventListener("click", (event) => {
@@ -928,7 +1002,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       connectFrom = "";
       board?.classList.add("connecting");
       const lead = document.getElementById("lead");
-      if (lead) lead.textContent = "Click the first component, then the one it should reach.";
+      if (lead) lead.textContent = uiText.clickFirst;
     });
     for (const chip of document.querySelectorAll(".chip")) {
       chip.addEventListener("dragstart", (event) => {
@@ -948,7 +1022,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       const el = document.getElementById("saved");
       const label = document.getElementById("saved-label");
       if (!el) return;
-      if (label) label.textContent = "Saved";
+      if (label) label.textContent = uiText.saved;
       el.classList.remove("flash");
       void el.offsetWidth;
       el.classList.add("flash");
@@ -963,7 +1037,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       if (data.type === "ship-log") {
         const pre = document.getElementById("ship-log");
         if (!pre) return;
-        if (pre.textContent === "No log yet.") pre.textContent = "";
+        if (pre.textContent === uiText.noLog) pre.textContent = "";
         pre.textContent += data.text;
         pre.scrollTop = pre.scrollHeight;
       }
@@ -971,12 +1045,12 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         const el = document.getElementById("saved");
         const label = document.getElementById("saved-label");
         if (!el || !label) return;
-        label.textContent = data.text || "Copied";
+        label.textContent = data.text === "Copied" ? uiText.copied : (data.text || uiText.copied);
         el.classList.remove("flash");
         void el.offsetWidth;
         el.classList.add("flash");
         const shown = label.textContent;
-        setTimeout(() => { if (label.textContent === shown) label.textContent = "Saved"; }, 1400);
+        setTimeout(() => { if (label.textContent === shown) label.textContent = uiText.saved; }, 1400);
       }
     });
     if (document.getElementById("saved")?.dataset.flash === "1") markSaved();
@@ -1016,5 +1090,6 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         if (state.selected.includes(":")) vscode.postMessage({ type: "delete", id: state.selected });
       }
     });`,
+    lang,
   );
 }
