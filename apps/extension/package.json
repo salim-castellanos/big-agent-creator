@@ -2,7 +2,7 @@
   "name": "bigagentcreator",
   "displayName": "BigAgentCreator",
   "description": "Design an AI agent workflow on a canvas and save it as a folder. Triggers, tools, and Telegram. Manage environments and deploy the same image with Docker locally, or straight to AWS, GCP, and Azure. Skip the agent and the path answers in code.",
-  "version": "0.2.6",
+  "version": "0.2.11",
   "publisher": "BigAgentCreator",
   "repository": {
     "type": "git",
@@ -10,25 +10,55 @@
     "directory": "apps/extension"
   },
   "icon": "media/icon.png",
-  "galleryBanner": { "color": "#1A2332", "theme": "dark" },
-  "keywords": ["ai agent", "agent workflow", "canvas", "telegram bot", "docker", "cursor", "tools", "playground", "webhook"],
-  "engines": { "vscode": "^1.95.0" },
-  "categories": ["AI"],
-  "activationEvents": ["onStartupFinished"],
+  "galleryBanner": {
+    "color": "#1A2332",
+    "theme": "dark"
+  },
+  "keywords": [
+    "ai agent",
+    "agent workflow",
+    "canvas",
+    "telegram bot",
+    "docker",
+    "cursor",
+    "tools",
+    "playground",
+    "webhook"
+  ],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "bigagent", "title": "BigAgentCreator", "icon": "media/icon.svg" }
+        {
+          "id": "bigagent",
+          "title": "BigAgentCreator",
+          "icon": "media/icon.svg"
+        }
       ]
     },
     "views": {
       "bigagent": [
-        { "type": "webview", "id": "bigagent.home", "name": "%view.designer%" }
+        {
+          "type": "webview",
+          "id": "bigagent.home",
+          "name": "%view.designer%"
+        }
       ]
     },
     "commands": [
-      { "command": "bigagent.open", "title": "%command.open%" }
+      {
+        "command": "bigagent.open",
+        "title": "%command.open%"
+      }
     ]
   },
   "scripts": {
@@ -38,8 +68,11 @@
     "test": "tsx --test src/project.test.ts"
   },
   "devDependencies": {
+    "@grok/agent-sdk": "^0.6.0",
+    "@types/node": "^22.14.0",
     "@types/vscode": "1.95.0",
     "esbuild": "0.25.0",
-    "tsx": "4.20.3"
+    "tsx": "4.20.3",
+    "typescript": "^6.0.3"
   }
 }

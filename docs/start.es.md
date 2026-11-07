@@ -20,6 +20,16 @@ Docker tiene que estar abierto. Iniciar lo usa para construir la imagen y correr
 4. Abre el playground y escribe `hi`. La respuesta es `hello`.
 5. Edita una tarjeta y guarda. Carga Telegram desk cuando quieras un chat de verdad.
 
+## WhatsApp
+
+1. En Diseño, agrega un disparador y pon el tipo `whatsapp`. Dibuja la flecha hasta Agente si la respuesta debe usar el modelo.
+2. Abre Secretos. Pon `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID` desde Meta → WhatsApp → API Setup. Inventa `WHATSAPP_VERIFY_TOKEN` (letras, números, `_`, `-`) y usa esa misma palabra en Meta.
+3. Abre Conectar. Pulsa **Comprobar número**. Meta tiene que contestar antes de seguir.
+4. Escribe tu número con el código de país y pulsa **Enviar prueba**. WhatsApp debe mostrar `hello`.
+5. Abre Desplegar y pulsa **Iniciar**. Abre el túnel. En Meta, pon la dirección https más `/v1/channels/<nombre>/` y suscríbete a `messages`.
+
+Una frase como «empieza por un mensaje de WhatsApp, responde con una base de conocimiento y, si no encontró, guarda la pregunta» son tres tarjetas: un disparador WhatsApp, una Guía o una Acción de lectura, y una Acción de escritura. `AGENTS.md` de una carpeta nueva le dice al chat del editor que haga ese corte.
+
 Si la carpeta ya tiene trabajo, la primera carga lo guarda en `.keep/original`. **Restaurar mi carpeta** trae esa copia. Tu `.env` se queda.
 
 ## Editar

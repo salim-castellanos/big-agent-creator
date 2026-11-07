@@ -4,7 +4,7 @@ Retomar por aquí. Lo que ya está en la carpeta se construyó sin HU ni spec. E
 
 ## Siguiente
 
-Abrir la primera HU del cambio que se pida, y su runbook, antes de tocar `apps/`. Hasta entonces no se codea desde el chat. El catálogo está en `docs/05-backlog/catalog.md`.
+Probar Slack, GitHub, GitLab y Bitbucket contra sus servicios. El código ya escribe el canal del SDK y Conectar nombra el secreto. WhatsApp sigue `ai-tested` hasta que se use contra Meta.
 
 ## Dónde está
 

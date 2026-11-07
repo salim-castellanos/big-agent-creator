@@ -8,6 +8,7 @@ import {
   arrange,
   captureFolder,
   deleteItem,
+  emitSdk,
   ensureStudioFile,
   flowLinks,
   GUIDE_URL,
@@ -29,7 +30,10 @@ import {
   scanWorkspace,
   scrubLogs,
   secretValue,
+  slackCheckTarget,
   telegramSetWebhookTarget,
+  whatsappCheckTarget,
+  whatsappSendTarget,
   safeRelative,
   saveAgentSettings,
   saveInstructions,
@@ -168,8 +172,12 @@ class Home implements vscode.WebviewViewProvider {
     );
     const kick = (uri: vscode.Uri) => {
       if (uri.fsPath.endsWith(`${path.sep}layout.json`)) return;
+      const envFile = uri.fsPath.endsWith(`${path.sep}.env`) || uri.fsPath.endsWith(`${path.sep}.env.example`);
       if (this.watchTimer) clearTimeout(this.watchTimer);
-      this.watchTimer = setTimeout(() => this.render(), 200);
+      this.watchTimer = setTimeout(() => {
+        if (!envFile && isProject(root)) emitSdk(root);
+        this.render();
+      }, 200);
     };
     watcher.onDidChange(kick);
     watcher.onDidCreate(kick);
@@ -446,6 +454,70 @@ class Home implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  private async checkWhatsApp(root: string): Promise<void> {
+    const names = loadProject(root).secrets.map((row) => row.name);
+    const target = whatsappCheckTarget(secretValue(root, "WHATSAPP_TOKEN"), secretValue(root, "WHATSAPP_PHONE_NUMBER_ID"));
+    if ("error" in target) {
+      this.ship = { ...this.ship, phase: "idle", summary: target.error };
+      this.render();
+      return;
+    }
+    this.ship = { ...this.ship, phase: "checking", summary: "Asking Meta whether this token matches the phone number ID." };
+    this.render();
+    let summary = "Could not reach Meta. Check the network, then try again.";
+    try {
+      const response = await fetch(target.endpoint, { headers: { authorization: target.authorization } });
+      summary = response.ok ? "WhatsApp answered for this phone number ID." : `Meta refused the check (${response.status}). The token and the phone number ID have to belong to the same app.`;
+    } catch {
+      summary = "Could not reach Meta. Check the network, then try again.";
+    }
+    this.ship = { ...this.ship, phase: "idle", summary: scrubLogs(summary, names) };
+    this.render();
+  }
+
+  private async sendWhatsAppTest(root: string, to: string): Promise<void> {
+    const names = loadProject(root).secrets.map((row) => row.name);
+    const target = whatsappSendTarget(secretValue(root, "WHATSAPP_TOKEN"), secretValue(root, "WHATSAPP_PHONE_NUMBER_ID"), to);
+    if ("error" in target) {
+      this.ship = { ...this.ship, phase: "idle", summary: target.error };
+      this.render();
+      return;
+    }
+    this.ship = { ...this.ship, phase: "checking", summary: "Sending hello through WhatsApp." };
+    this.render();
+    let summary = "Could not reach Meta. Check the network, then try again.";
+    try {
+      const response = await fetch(target.endpoint, { method: "POST", headers: { authorization: target.authorization, "content-type": "application/json" }, body: target.body });
+      summary = response.ok ? "Sent hello. Open WhatsApp on that number." : `Meta refused the message (${response.status}). The number needs the country code, and the token has to be allowed to send.`;
+    } catch {
+      summary = "Could not reach Meta. Check the network, then try again.";
+    }
+    this.ship = { ...this.ship, phase: "idle", summary: scrubLogs(summary, names) };
+    this.render();
+  }
+
+  private async checkSlack(root: string): Promise<void> {
+    const names = loadProject(root).secrets.map((row) => row.name);
+    const target = slackCheckTarget(secretValue(root, "SLACK_BOT_TOKEN"));
+    if ("error" in target) {
+      this.ship = { ...this.ship, phase: "idle", summary: target.error };
+      this.render();
+      return;
+    }
+    this.ship = { ...this.ship, phase: "checking", summary: "Asking Slack who this bot is." };
+    this.render();
+    let summary = "Could not reach Slack. Check the network, then try again.";
+    try {
+      const response = await fetch(target.endpoint, { headers: { authorization: target.authorization } });
+      const payload = (await response.json()) as { ok?: boolean };
+      summary = payload.ok ? "Slack answered for this bot token." : "Slack refused the token.";
+    } catch {
+      summary = "Could not reach Slack. Check the network, then try again.";
+    }
+    this.ship = { ...this.ship, phase: "idle", summary: scrubLogs(summary, names) };
+    this.render();
+  }
+
   private async waitForHealth(): Promise<boolean> {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
@@ -532,7 +604,9 @@ class Home implements vscode.WebviewViewProvider {
     egress?: string[];
     verify?: boolean;
     url?: string;
+    phone?: string;
     route?: string;
+    repo?: string;
     secret?: string;
     calls?: string;
     check?: string;
@@ -756,6 +830,9 @@ class Home implements vscode.WebviewViewProvider {
         else if (message.task === "stop") await this.compose(root, ["compose", "down"], "stopping");
         else if (message.task === "tunnel") await this.openTunnel();
         else if (message.task === "webhook") await this.registerWebhook(root, message.url || this.ship.publicUrl);
+        else if (message.task === "whatsapp-check") await this.checkWhatsApp(root);
+        else if (message.task === "whatsapp-send") await this.sendWhatsAppTest(root, message.phone || "");
+        else if (message.task === "slack-check") await this.checkSlack(root);
         return;
       }
       if (message.type === "instructions") {
@@ -837,6 +914,7 @@ class Home implements vscode.WebviewViewProvider {
           verify: Boolean(message.verify),
           url: message.url ?? current?.url ?? "",
           route: message.route ?? current?.route ?? "",
+          repo: message.repo ?? current?.repo ?? "",
           secret: message.secret ?? current?.secret ?? "",
           calls: message.calls ?? current?.calls ?? "",
           parameters: message.parameters ?? current?.parameters ?? [],

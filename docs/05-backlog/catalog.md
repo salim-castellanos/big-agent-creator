@@ -6,10 +6,12 @@ No cargues todas las HUs. Abre este catálogo y luego **una** HU.
 
 ## Módulos
 
-Todavía no hay módulo. No se crea la carpeta vacía.
+| Módulo | Para qué |
+| --- | --- |
+| [01-canales](01-canales/E-001-llegar/epic.md) | Llegar al agente por un canal de verdad |
 
-Lo construido hasta la 0.2.6 está en `../linea-base.md`. Eso no es una HU. No se reescribe el pasado como si hubiera habido spec. `STATUS.md` es el relato. Si discrepa, manda la línea base.
+Lo anterior a HU-001 está en `../linea-base.md`. No se reescribe como si hubiera habido spec.
 
 ## Siguiente
 
-El próximo cambio de comportamiento crea aquí la primera épica, la feature y la HU, y un runbook en `../07-runbooks/`, antes de tocar `apps/`.
+Los canales que todavía no tienen tarjeta de alta: Slack, GitHub, GitLab y Bitbucket. WhatsApp está en [001-whatsapp](../07-runbooks/001-whatsapp/runbook.md), probado por la IA.

@@ -27,9 +27,45 @@ export type Item = {
   transport?: Transport;
   advertise?: boolean;
   command?: string;
+  repo?: string;
 };
 
 export type SecretRow = { name: string; configured: boolean };
+
+/** What a person must fill in before that channel can be finished. A new channel is added here and in the flow simulation. */
+export const CHANNEL_NEEDS: Record<string, { secrets: string[]; repo: "" | "repos" | "projects" }> = {
+  telegram: { secrets: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"], repo: "" },
+  whatsapp: { secrets: ["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_APP_SECRET", "WHATSAPP_APP_ID"], repo: "" },
+  slack: { secrets: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], repo: "" },
+  github: { secrets: ["GITHUB_WEBHOOK_SECRET", "GITHUB_TOKEN"], repo: "repos" },
+  gitlab: { secrets: ["GITLAB_WEBHOOK_SECRET", "GITLAB_TOKEN"], repo: "projects" },
+  bitbucket: { secrets: ["BITBUCKET_WEBHOOK_SECRET", "BITBUCKET_TOKEN"], repo: "repos" },
+};
+
+export const LIBRARY_KINDS: Kind[] = ["channel", "schedule", "tool", "skill", "mcp", "host", "subagent", "hook"];
+
+export const TRIGGER_TYPES = ["telegram", "whatsapp", "webhook", "slack", "github", "gitlab", "bitbucket", "cron"] as const;
+
+export function validRepo(value: string | undefined): boolean {
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test((value || "").trim());
+}
+
+export function flowGaps(project: Project): Finding[] {
+  const names = new Set(project.secrets.map((row) => row.name));
+  const out: Finding[] = [];
+  for (const item of project.items) {
+    if (item.kind !== "channel") continue;
+    const need = CHANNEL_NEEDS[item.description];
+    if (!need) continue;
+    if (need.repo && !validRepo(item.repo)) {
+      out.push({ id: `${item.kind}:${item.name}`, message: `Set the repository on ${item.name} as owner/name, then Save.` });
+    }
+    for (const secret of need.secrets) {
+      if (!names.has(secret)) out.push({ id: `secret:${secret}`, message: `${secret} is not on the Secrets page. Save the ${item.description} trigger.` });
+    }
+  }
+  return out;
+}
 
 export type Project = {
   root: string;
@@ -124,6 +160,7 @@ function writeStartFiles(root: string): void {
 5. To edit, select a card. The panel on the right is that card. Save.
 6. A trigger calls the model only when its arrow reaches Agent.
 7. Help, in the canvas header, is this same path. English | Español changes the labels only.
+8. WhatsApp: add a Trigger of type whatsapp, set the four WHATSAPP_ names in Secrets, Start, then Connect.
 
 Guide: ${GUIDE_URL}
 Español: ${GUIDE_URL_ES}
@@ -137,11 +174,37 @@ Español: ${GUIDE_URL_ES}
       agents,
       `# This folder
 
-An agent folder made with BigAgentCreator. Before editing, read START.md in this folder and the guide:
+Before editing, read START.md. Secret values stay in .env and never in the chat. The designer rewrites bot/ from the files you change.
 
-${GUIDE_URL}
+When the person describes an agent in one sentence, write these files. Do not invent a database.
 
-One bot/agent.ts. Secret values stay in .env, never in the Dockerfile, and never in the chat.
+Sentence: starts from a WhatsApp message, answers from a knowledge base, and stores the question when nothing was found.
+
+channels/desk.json
+{"type":"whatsapp","description":"A WhatsApp message","verify":true,"route":"/","secret":"WHATSAPP_VERIFY_TOKEN"}
+
+mcp-connections/knowledge.json
+{"url":"http://127.0.0.1:7000/knowledge","description":"The knowledge base","transport":"http"}
+
+tools/lookup.json
+{"description":"Find a passage in the knowledge base","effect":"read","calls":"mcp:knowledge","procedure":"return input;"}
+
+tools/save-gap.json
+{"description":"Store a question the knowledge base could not answer","effect":"write","calls":"http://127.0.0.1:7000/gaps","procedure":"return input;"}
+
+skills/when-empty.md
+When: the lookup found nothing
+
+Tell the person you stored the question, and call save-gap with it.
+
+instructions.md
+Answer only from a passage lookup returns. If lookup returns nothing, call save-gap and say you stored the question.
+
+If .bigagent/layout.json has links, add channel:desk to agent, and agent to tool:lookup, tool:save-gap, skill:when-empty, and mcp:knowledge. If links is null, leave it null.
+
+Then say the next clicks: Secrets (CURSOR_API_KEY and the WHATSAPP_ names), Ship Start, Connect, Check number, Send a test.
+
+Guide: ${GUIDE_URL}
 `,
       "utf8",
     );
@@ -261,7 +324,8 @@ export function review(project: Project): Finding[] {
     const id = `${item.kind}:${item.name}`;
     if (item.kind === "channel") {
       const type = item.description || "webhook";
-      if (!item.route?.trim()) {
+      const packed = ["telegram", "whatsapp", "slack", "github", "gitlab", "bitbucket"].includes(type);
+      if (!packed && !item.route?.trim()) {
         out.push({ id, message: type === "cron" ? "This schedule has no cron expression." : "This hook has no endpoint." });
       }
       if (type !== "cron" && item.verify && !item.secret?.trim()) {
@@ -395,8 +459,8 @@ function readHooks(root: string): Item[] {
 
 function readChannels(root: string): Item[] {
   return files(root, "channels", ".json").map((name) => {
-    const data = readJson<{ type?: string; description?: string; verify?: boolean; route?: string; secret?: string }>(path.join(root, "channels", `${name}.json`), {});
-    return { kind: "channel", name, description: data.type || "webhook", body: data.description || "", verify: Boolean(data.verify), route: data.route || "", secret: data.secret || "" };
+    const data = readJson<{ type?: string; description?: string; verify?: boolean; route?: string; secret?: string; repo?: string }>(path.join(root, "channels", `${name}.json`), {});
+    return { kind: "channel", name, description: data.type || "webhook", body: data.description || "", verify: Boolean(data.verify), route: data.route || "", secret: data.secret || "", repo: data.repo || "" };
   });
 }
 
@@ -525,8 +589,10 @@ export function saveItem(root: string, item: Item): void {
       verify: Boolean(item.verify),
       route: item.route || "",
       secret: item.secret || "",
+      repo: item.repo || "",
     });
-    if (item.description === "telegram") rememberSecrets(root, [item.secret || "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN"]);
+    const need = CHANNEL_NEEDS[item.description || ""];
+    if (need) rememberSecrets(root, [...need.secrets, item.secret || ""]);
   }
   if (item.kind === "schedule") {
     writeJson(path.join(root, "schedules", `${name}.json`), { cron: item.route || "", description: item.description || item.body || "" });
@@ -534,6 +600,7 @@ export function saveItem(root: string, item: Item): void {
   if (item.kind === "hook") {
     writeJson(path.join(root, "hooks", `${name}.json`), { event: item.description || "turn.completed", procedure: item.body || "" });
   }
+  if (item.secret) rememberSecrets(root, [item.secret]);
   emitSdk(root);
 }
 
@@ -580,6 +647,72 @@ export function telegramReach(root: string): Finding[] {
     out.push({ id: "telegram-token", message: "TELEGRAM_BOT_TOKEN should be the BotFather value, which looks like 123456:ABC. It is a different field from TELEGRAM_WEBHOOK_SECRET." });
   }
   return out;
+}
+
+/** WhatsApp Cloud API. The verify token is the word Meta echoes. The phone number id is digits. The token is the long Meta value. Messages never include the value. */
+export function whatsappReach(root: string): Finding[] {
+  const project = loadProject(root);
+  if (!project.items.some((item) => item.kind === "channel" && item.description === "whatsapp")) return [];
+  const token = secretValue(root, "WHATSAPP_TOKEN").trim();
+  const phone = secretValue(root, "WHATSAPP_PHONE_NUMBER_ID").trim();
+  const verify = secretValue(root, "WHATSAPP_VERIFY_TOKEN").trim();
+  const out: Finding[] = [];
+  if (!token) out.push({ id: "whatsapp-token", message: "WHATSAPP_TOKEN is empty. Paste the token from Meta, WhatsApp, API Setup." });
+  else if (/\s/.test(token) || token.length < 20) out.push({ id: "whatsapp-token", message: "WHATSAPP_TOKEN should be the long token from Meta, with no spaces." });
+  if (!phone) out.push({ id: "whatsapp-phone", message: "WHATSAPP_PHONE_NUMBER_ID is empty. Copy the phone number ID from Meta, API Setup." });
+  else if (!/^\d+$/.test(phone)) out.push({ id: "whatsapp-phone", message: "WHATSAPP_PHONE_NUMBER_ID should be digits only. It is not the phone number people dial." });
+  if (!verify) out.push({ id: "whatsapp-verify", message: "WHATSAPP_VERIFY_TOKEN is empty. Invent a word of letters, numbers, _ and -, then use that same word in Meta." });
+  else if (!/^[A-Za-z0-9_-]{1,256}$/.test(verify)) out.push({ id: "whatsapp-verify", message: "WHATSAPP_VERIFY_TOKEN may only use letters, numbers, _ and -." });
+  return out;
+}
+
+export function whatsappCheckTarget(token: string, phoneId: string): { endpoint: string; authorization: string } | { error: string } {
+  const phone = phoneId.trim();
+  const value = token.trim();
+  if (!/^\d+$/.test(phone)) return { error: "WHATSAPP_PHONE_NUMBER_ID should be digits only. It is not the phone number people dial." };
+  if (/\s/.test(value) || value.length < 20) return { error: "WHATSAPP_TOKEN should be the long token from Meta, with no spaces." };
+  return { endpoint: `https://graph.facebook.com/v21.0/${phone}?fields=display_phone_number`, authorization: `Bearer ${value}` };
+}
+
+export function whatsappSendTarget(token: string, phoneId: string, to: string): { endpoint: string; authorization: string; body: string } | { error: string } {
+  const check = whatsappCheckTarget(token, phoneId);
+  if ("error" in check) return check;
+  const digits = to.trim().replace(/^\+/, "").replace(/[\s-]/g, "");
+  if (!/^\d{8,15}$/.test(digits)) return { error: "The test number should be the country code and the number, digits only." };
+  return {
+    endpoint: `https://graph.facebook.com/v21.0/${phoneId.trim()}/messages`,
+    authorization: check.authorization,
+    body: JSON.stringify({ messaging_product: "whatsapp", to: digits, type: "text", text: { body: "hello" } }),
+  };
+}
+
+const PACK_SECRET = /^[A-Za-z0-9_-]{1,256}$/;
+
+export function slackReach(root: string): Finding[] {
+  const project = loadProject(root);
+  if (!project.items.some((item) => item.kind === "channel" && item.description === "slack")) return [];
+  const bot = secretValue(root, "SLACK_BOT_TOKEN").trim();
+  const app = secretValue(root, "SLACK_APP_TOKEN").trim();
+  const out: Finding[] = [];
+  if (!bot.startsWith("xoxb-")) out.push({ id: "slack-bot", message: "SLACK_BOT_TOKEN should be the bot token from Slack, the one that starts with xoxb-." });
+  if (!app.startsWith("xapp-")) out.push({ id: "slack-app", message: "SLACK_APP_TOKEN should be the app-level token from Slack, the one that starts with xapp-." });
+  return out;
+}
+
+export function slackCheckTarget(token: string): { endpoint: string; authorization: string } | { error: string } {
+  const value = token.trim();
+  if (!value.startsWith("xoxb-")) return { error: "SLACK_BOT_TOKEN should be the bot token from Slack, the one that starts with xoxb-." };
+  return { endpoint: "https://slack.com/api/auth.test", authorization: `Bearer ${value}` };
+}
+
+export function hookSecretReach(root: string, type: "github" | "gitlab" | "bitbucket"): Finding[] {
+  const project = loadProject(root);
+  if (!project.items.some((item) => item.kind === "channel" && item.description === type)) return [];
+  const name = type === "github" ? "GITHUB_WEBHOOK_SECRET" : type === "gitlab" ? "GITLAB_WEBHOOK_SECRET" : "BITBUCKET_WEBHOOK_SECRET";
+  const secret = secretValue(root, name).trim();
+  if (!secret) return [{ id: `${type}-secret`, message: `${name} is empty. Invent a word of letters, numbers, _ and -, and use that same word as the webhook secret.` }];
+  if (!PACK_SECRET.test(secret)) return [{ id: `${type}-secret`, message: `${name} may only use letters, numbers, _ and -.` }];
+  return [];
 }
 
 /** https origin, or the same origin already ending in /v1/channels/<name>/. */
@@ -911,6 +1044,65 @@ function connectionSource(item: Item): string {
   return lines.join("\n");
 }
 
+function accountScope(kind: "repos" | "projects", repo: string | undefined): string {
+  if (!validRepo(repo)) return "";
+  return `  cursorAccount: { ${kind}: [${q(repo!.trim())}] },`;
+}
+
+function packChannel(item: Item): string | undefined {
+  const event = item.route || "";
+  if (item.description === "slack") {
+    return `import { slackChannel } from "@grok/agent-sdk/channels/slack";\n\n// ${MARK}\n// Socket mode. Secrets: SLACK_BOT_TOKEN (xoxb-) and SLACK_APP_TOKEN (xapp-).\nexport default slackChannel();\n`;
+  }
+  if (item.description === "github") {
+    const name = event === "issues" ? "issues" : event === "push" ? "push" : "pull_request";
+    const hook =
+      name === "pull_request"
+        ? "  onPullRequest: (ctx) => ({ auth: defaultGitHubAuth(ctx) }),"
+        : `  onEvent: (ctx, event) => (event.eventName === ${q(name)} ? { auth: defaultGitHubAuth(ctx) } : null),`;
+    return [
+      'import { defaultGitHubAuth, githubChannel } from "@grok/agent-sdk/channels/github";',
+      "",
+      `// ${MARK}`,
+      "export default githubChannel({",
+      `  botName: ${q(item.name)},`,
+      accountScope("repos", item.repo),
+      '  credentials: { webhookSecret: { secretName: "GITHUB_WEBHOOK_SECRET" } },',
+      hook,
+      "});",
+      "",
+    ].join("\n");
+  }
+  if (item.description === "gitlab") {
+    const hook = event === "note" ? "  onNote: (ctx) => ({ auth: defaultGitLabAuth(ctx) })," : "  onMergeRequest: (ctx) => ({ auth: defaultGitLabAuth(ctx) }),";
+    return [
+      'import { defaultGitLabAuth, gitlabChannel } from "@grok/agent-sdk/channels/gitlab";',
+      "",
+      `// ${MARK}`,
+      "export default gitlabChannel({",
+      accountScope("projects", item.repo),
+      '  webhookSecret: { secretName: "GITLAB_WEBHOOK_SECRET" },',
+      hook,
+      "});",
+      "",
+    ].join("\n");
+  }
+  if (item.description === "bitbucket") {
+    return [
+      'import { bitbucketChannel, defaultBitbucketAuth } from "@grok/agent-sdk/channels/bitbucket";',
+      "",
+      `// ${MARK}`,
+      "export default bitbucketChannel({",
+      accountScope("repos", item.repo),
+      '  webhookSecret: { secretName: "BITBUCKET_WEBHOOK_SECRET" },',
+      "  onPullRequest: (ctx) => ({ auth: defaultBitbucketAuth(ctx) }),",
+      "});",
+      "",
+    ].join("\n");
+  }
+  return undefined;
+}
+
 function telegramLibrary(): string {
   return [
     `// ${MARK}`,
@@ -937,6 +1129,9 @@ function directReply(body: string): string {
 
 function channelSource(item: Item, model: boolean): string {
   if (item.description === "telegram") return telegramChannel(item, model);
+  if (item.description === "whatsapp") return whatsappChannel(item, model);
+  const packed = packChannel(item);
+  if (packed) return packed;
   const route = item.route && item.route.startsWith("/") ? item.route : `/${item.name}`;
   const handler = model
     ? `handler: async (_request, { send, waitUntil, body }) => {\n        waitUntil(send(body.text));\n        return new Response(null, { status: 202 });\n      },`
@@ -991,6 +1186,102 @@ function telegramChannel(item: Item, model: boolean): string {
     '    async "message.completed"(event, channel) {',
     '      if (event.data.finishReason === "tool_call" || !event.data.text) return;',
     "      await replyTelegram(channel.state.chatId, event.data.text);",
+    "    },",
+    "  },",
+    "});",
+    "",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+function whatsappLibrary(): string {
+  return [
+    `// ${MARK}`,
+    "export async function replyWhatsApp(to: string, text: string): Promise<void> {",
+    "  const token = process.env.WHATSAPP_TOKEN;",
+    "  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;",
+    "  if (!token || !phoneId || !to || !text) return;",
+    "  const response = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/messages`, {",
+    "    method: \"POST\",",
+    "    headers: { authorization: `Bearer ${token}`, \"content-type\": \"application/json\" },",
+    "    body: JSON.stringify({ messaging_product: \"whatsapp\", to, type: \"text\", text: { body: text.slice(0, 4000) } }),",
+    "    signal: AbortSignal.timeout(8000),",
+    "  });",
+    "  if (!response.ok) console.error(`[whatsapp] send failed: ${response.status}`);",
+    "}",
+    "",
+  ].join("\n");
+}
+
+function whatsappChannel(item: Item, model: boolean): string {
+  const route = item.route && item.route.startsWith("/") ? item.route : "/";
+  return [
+    'import { createHmac, timingSafeEqual } from "node:crypto";',
+    'import { defineChannel, GET, POST, publicEndpoint } from "@grok/agent-sdk/channels";',
+    'import * as z from "zod/v4";',
+    'import { replyWhatsApp } from "../lib/whatsapp.js";',
+    "",
+    `// ${MARK}`,
+    "type WaMessage = { from?: string; type?: string; text?: { body?: string } };",
+    "type WaBody = { entry?: Array<{ changes?: Array<{ value?: { messages?: WaMessage[] } }> }> };",
+    "",
+    "async function signed(request: Request): Promise<boolean> {",
+    "  const secret = process.env.WHATSAPP_APP_SECRET;",
+    "  if (!secret) return true;",
+    "  const got = request.headers.get(\"x-hub-signature-256\") || \"\";",
+    "  const raw = await request.clone().text();",
+    "  const hex = createHmac(\"sha256\", secret).update(raw).digest(\"hex\");",
+    "  const a = Buffer.from(got);",
+    "  const b = Buffer.from(`sha256=${hex}`);",
+    "  return a.length === b.length && timingSafeEqual(a, b);",
+    "}",
+    "",
+    "export default defineChannel<{ from: string }>({",
+    "  auth: [publicEndpoint()],",
+    '  state: { from: "" },',
+    "  routes: [",
+    `    GET(${q(route)}, {`,
+    "      querySchema: z.object({",
+    '        "hub.mode": z.string().optional(),',
+    '        "hub.verify_token": z.string().optional(),',
+    '        "hub.challenge": z.string().optional(),',
+    "      }),",
+    "      handler: async (_request, { query }) => {",
+    '        const mode = query["hub.mode"];',
+    '        const token = query["hub.verify_token"];',
+    '        const challenge = query["hub.challenge"];',
+    "        if (mode === \"subscribe\" && token && token === process.env.WHATSAPP_VERIFY_TOKEN && challenge) {",
+    "          return new Response(challenge, { status: 200 });",
+    "        }",
+    "        return new Response(null, { status: 403 });",
+    "      },",
+    "    }),",
+    `    POST(${q(route)}, {`,
+    `      description: ${q(item.body || "A WhatsApp message")},`,
+    "      bodySchema: z.unknown(),",
+    `      handler: async (request, { ${model ? "send, waitUntil, body" : "waitUntil, body"} }) => {`,
+    "        if (!(await signed(request))) return new Response(null, { status: 401 });",
+    "        const payload = body as WaBody;",
+    "        const message = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0];",
+    "        const text = message?.type === \"text\" ? message.text?.body?.trim() : \"\";",
+    "        const from = message?.from;",
+    "        if (!text || !from) return new Response(null, { status: 200 });",
+    model ? "        waitUntil(send(text, {" : `        const reply = ${directReply(item.body)};`,
+    model ? "          continuationToken: `whatsapp:${from}`," : "        waitUntil(replyWhatsApp(from, String(reply).slice(0, 4000)));",
+    ...(model ? ["          state: { from },", "          title: `WhatsApp ${from}`,", "        }));"] : []),
+    "        return new Response(null, { status: 200 });",
+    "      },",
+    "    }),",
+    "  ],",
+    "  events: {",
+    '    async "turn.failed"(event) {',
+    "      const detail = String(event.data.message || \"The turn failed before a reply.\").slice(0, 300);",
+    "      console.error(`[whatsapp] turn failed: ${detail}`);",
+    "    },",
+    '    async "message.completed"(event, channel) {',
+    '      if (event.data.finishReason === "tool_call" || !event.data.text) return;',
+    "      await replyWhatsApp(channel.state.from, event.data.text);",
     "    },",
     "  },",
     "});",
@@ -1075,6 +1366,7 @@ export function emitSdk(root: string): void {
   write("bot/instructions.md", `<!-- ${MARK} -->\n${project.instructions.endsWith("\n") ? project.instructions : `${project.instructions}\n`}`);
   const wired = flowLinks(project, readLayout(root));
   let telegram = false;
+  let whatsapp = false;
   for (const item of project.items) {
     if (item.kind === "tool") {
       const effect = item.effect === "irreversible" || item.effect === "idempotent" || item.effect === "write" ? item.effect === "irreversible" ? "write" : item.effect : "read";
@@ -1109,12 +1401,18 @@ export function emitSdk(root: string): void {
       );
     }
     if (item.kind === "channel") {
+      if (item.description === "cron") {
+        write(`bot/schedules/${item.name}.md`, `---\ncron: ${q(item.route || "")}\n---\n\n<!-- ${MARK} -->\n${item.body || ""}\n`);
+        continue;
+      }
       if (item.description === "telegram") telegram = true;
+      if (item.description === "whatsapp") whatsapp = true;
       const model = project.think && reachesNode(wired, `${item.kind}:${item.name}`, "agent");
       write(`bot/channels/${item.name}.ts`, channelSource(item, model));
     }
   }
   if (telegram) write("bot/lib/telegram.ts", telegramLibrary());
+  if (whatsapp) write("bot/lib/whatsapp.ts", whatsappLibrary());
   const roots = ["bot/tools", "bot/skills", "bot/mcp-connections", "bot/host-connections", "bot/schedules", "bot/hooks", "bot/channels", "bot/lib"];
   for (const rel of roots) {
     const dir = path.join(root, rel);

@@ -8,3 +8,4 @@ Lo que la carpeta ya hace está en `docs/linea-base.md`. Se abre con la card `li
 El backlog está en `docs/05-backlog/catalog.md`. Vacío no es permiso: el cambio de comportamiento abre la HU y el runbook antes de `apps/`.
 Lo que dolió al ejecutar está en `LECCIONES.md`.
 Código del diseñador: `apps/extension/`.
+Una funcionalidad no está hecha si `npm test` no la simula y la carpeta generada no pasa `deliveryCheck` y el typecheck del SDK. La regla está en `docs/calidad.md`.

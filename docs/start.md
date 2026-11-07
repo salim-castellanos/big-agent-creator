@@ -20,6 +20,16 @@ Docker has to be open. Start uses it to build the image and run the agent. The s
 4. Open the playground and type `hi`. The reply is `hello`.
 5. Edit a card and save. Load Telegram desk when you want a real chat.
 
+## WhatsApp
+
+1. On Design, add a Trigger and set its type to `whatsapp`. Draw the arrow to Agent if the reply should use the model.
+2. Open Secrets. Set `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` from Meta → WhatsApp → API Setup. Invent `WHATSAPP_VERIFY_TOKEN` (letters, numbers, `_`, `-`) and use that same word in Meta.
+3. Open Connect. Press **Check number**. Meta must answer before you continue.
+4. Type your own number with the country code and press **Send a test**. WhatsApp should show `hello`.
+5. Open Ship and press **Start**. Open the tunnel. In Meta, set the callback to the https address plus `/v1/channels/<name>/`, and subscribe to `messages`.
+
+A sentence such as “start from a WhatsApp message, answer from a knowledge base, and save the question when nothing was found” is three cards: a WhatsApp trigger, a Guide or a read Action, and a write Action. `AGENTS.md` in a new folder tells the editor chat to make that split.
+
 If the folder already has work, the first load keeps it in `.keep/original`. **Restore my folder** brings that copy back. Your `.env` stays.
 
 ## Edit

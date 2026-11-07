@@ -1,6 +1,6 @@
 # Línea base — BigAgentCreator
 
-Lo que la carpeta hace en la fuente **0.2.6**. No es una HU ni una spec. El cambio nuevo abre las suyas antes de `apps/`.
+Lo que la carpeta hace en la fuente **0.2.8**. No es una HU ni una spec. El cambio nuevo abre las suyas antes de `apps/`.
 
 El git publicado es `https://github.com/salim-castellanos/big-agent-creator`. `origin/main` es el corte de la tienda. El trabajo posterior está en el árbol de trabajo y no en ese commit. `STATUS.md` conserva el relato de versiones. Si discrepa con este archivo, manda este.
 
@@ -23,7 +23,7 @@ VS Code o Cursor. No es un fork del editor. Publicador `BigAgentCreator`. Versi�
 
 El menú, de izquierda a derecha: **Diseño**, Probar, Plataforma, Secretos, Conectar, Desplegar, Ejemplos. Al final, **English | Español** y **Ayuda**. El idioma cambia rótulos y avisos. No cambia archivos ni identificadores. Ayuda cuenta cómo arrancar Hello, por qué existe `CURSOR_API_KEY` y qué es el Agent SDK. La guía larga es `docs/start.md` y `docs/start.es.md`. Al inicializar se escriben `START.md` y `AGENTS.md` si faltan, y apuntan a esa guía.
 
-El chat del editor no tiene herramientas de esta extensión. `CONTEXT.md` las nombra como intención. No están en el código.
+El chat del editor no tiene herramientas propias. Lee el `AGENTS.md` de la carpeta del agente. Ahí está el encargo para crear, con archivos, el agente de WhatsApp que consulta una base y guarda la pregunta cuando no hay respuesta. Con el diseñador abierto, ese cambio reescribe `bot/`.
 
 ## Lienzo
 
@@ -69,7 +69,7 @@ Docker no es loopback dentro del contenedor. El Compose local pone `BIGAGENT_ADM
 | Probar | Casos de evaluación en archivos del editor. |
 | Plataforma | Archivos que el lienzo no dibuja: código compartido, semilla, artefactos, recordatorios, extensiones. |
 | Secretos | Nombre y valor. El valor no se muestra después. |
-| Conectar | Alta del canal. Hoy, Telegram: túnel de Cloudflare y **Registrar webhook**. Register queda apagado si el secreto no es solo letras, números, `_` y `-`. El token de BotFather, con `:`, va en `TELEGRAM_BOT_TOKEN`. El token no se escribe en el log. |
+| Conectar | Telegram: túnel y webhook. WhatsApp: comprobar el número y enviar `hello`. Slack: comprobar el token del bot. GitHub, GitLab y Bitbucket: en la tarjeta del disparador se escribe el repositorio (`owner/name`, `group/project` o `workspace/repo`) y, al guardar, los secretos aparecen en Secretos y en Conectar. |
 | Desplegar | **Start**, **Rebuild**, **Stop**. Cuando corre, muestra `http://127.0.0.1:3000/playground` y lo abre. Kubernetes, AWS, GCP y Azure se nombran. No despliegan. |
 | Ejemplos | Hello, Telegram desk, Support desk, Change gate. **Cargar** reemplaza el lienzo. La primera vez guarda la carpeta en `.keep/original` y no vuelve a pisar esa copia. `.env` no se reemplaza. **Restaurar mi carpeta** devuelve esa copia y borra lo que el ejemplo agregó. |
 

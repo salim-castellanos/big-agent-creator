@@ -1,5 +1,5 @@
 import { exampleText, phrase, studioText, t, type CopyKey, type Lang } from "./copy";
-import { deliveryCheck, EXAMPLES, executionSteps, flowLinks, GUIDE_URL, GUIDE_URL_ES, review, telegramReach, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
+import { CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, GUIDE_URL, GUIDE_URL_ES, hookSecretReach, LIBRARY_KINDS, review, slackReach, telegramReach, TRIGGER_TYPES, whatsappReach, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
 
 export type ShipStatus = {
   docker: "unknown" | "down" | "ready";
@@ -50,7 +50,7 @@ function icon(name: Kind | "agent" | "limits"): string {
   return `<svg class="ico" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body[name]}</svg>`;
 }
 
-const KINDS: Kind[] = ["channel", "schedule", "tool", "skill", "mcp", "host", "subagent", "hook"];
+const KINDS: Kind[] = LIBRARY_KINDS;
 
 function esc(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
@@ -119,6 +119,12 @@ function nodeButton(item: Item, selected: string, at?: { x: number; y: number },
 function group(step: string, title: string, hint: string, items: Item[], selected: string): string {
   const cards = items.map((item) => nodeButton(item, selected)).join("");
   return `<section><header class="step"><span>${step}</span><h3>${title}</h3></header><p class="hint">${hint}</p>${cards || `<p class="ghost">Nothing here yet. Add it from the library.</p>`}</section>`;
+}
+
+function secretList(lang: Lang, type: string): string {
+  const need = CHANNEL_NEEDS[type];
+  if (!need) return "";
+  return `<ul class="secrets">${need.secrets.map((name) => `<li><strong>${name}</strong><span>${t(lang, "secret_after_save")}</span></li>`).join("")}</ul>`;
 }
 
 function inspector(project: Project, selected: string, lang: Lang): string {
@@ -219,7 +225,7 @@ function inspector(project: Project, selected: string, lang: Lang): string {
       <label>${t(lang, "procedure")}<textarea id="procedure">${esc(item.body)}</textarea></label>${foot}`;
   }
   const type = item.description || "webhook";
-  const types = ["telegram", "webhook", "slack", "github", "gitlab", "bitbucket", "cron"]
+  const types = TRIGGER_TYPES
     .map((option) => `<option value="${option}" ${type === option ? "selected" : ""}>${option}</option>`)
     .join("");
   const show = (name: string) => (type === name ? "" : " hidden");
@@ -231,11 +237,18 @@ function inspector(project: Project, selected: string, lang: Lang): string {
       <label class="check"><input id="verify" type="checkbox" ${item.verify ? "checked" : ""} /> ${t(lang, "verify_sig")}</label>
       <label>${t(lang, "secret_name")}<input id="secret" value="${esc(item.secret || "")}" placeholder="WEBHOOK_SECRET" /></label>
     </div>
+    <div class="assist" data-for="whatsapp"${show("whatsapp")}>
+      <p class="hint">${t(lang, "whatsapp_hint")}</p>
+      <label>${t(lang, "webhook_secret")}<input id="secret-whatsapp" value="${esc(item.secret || "WHATSAPP_VERIFY_TOKEN")}" placeholder="WHATSAPP_VERIFY_TOKEN" /></label>
+      ${secretList(lang, "whatsapp")}
+      <p class="hint">${t(lang, "whatsapp_token_hint")}</p>
+    </div>
     <div class="assist" data-for="telegram"${show("telegram")}>
       <label>${t(lang, "endpoint")}<input id="route-telegram" value="${esc(type === "telegram" ? item.route || "/" : "/")}" placeholder="/" /></label>
       <p class="hint">${esc(t(lang, "telegram_hint", { name: item.name }))}</p>
       <label class="check"><input id="verify-telegram" type="checkbox" ${item.verify ? "checked" : ""} /> ${t(lang, "verify_token")}</label>
       <label>${t(lang, "webhook_secret")}<input id="secret-telegram" value="${esc(item.secret || "TELEGRAM_WEBHOOK_SECRET")}" placeholder="TELEGRAM_WEBHOOK_SECRET" /></label>
+      ${secretList(lang, "telegram")}
       <p class="hint">${t(lang, "telegram_token_hint")}</p>
     </div>
     <div class="assist" data-for="cron"${show("cron")}>
@@ -245,17 +258,26 @@ function inspector(project: Project, selected: string, lang: Lang): string {
     </div>
     <div class="assist" data-for="slack"${show("slack")}>
       <label>${t(lang, "event")}<select id="route-slack">${["message", "app_mention"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      ${secretList(lang, "slack")}
       <p class="hint">${t(lang, "slack_hint")}</p>
     </div>
     <div class="assist" data-for="github"${show("github")}>
+      <label>${t(lang, "repository")}<input id="repo-github" value="${esc(item.repo || "")}" placeholder="owner/repo" /></label>
       <label>${t(lang, "event")}<select id="route-github">${["pull_request", "push", "issues"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <ul class="secrets">${CHANNEL_NEEDS.github.secrets.map((name) => `<li><strong>${name}</strong><span>${t(lang, "secret_after_save")}</span></li>`).join("")}</ul>
       <p class="hint">${t(lang, "github_hint")}</p>
     </div>
     <div class="assist" data-for="gitlab"${show("gitlab")}>
+      <label>${t(lang, "repository")}<input id="repo-gitlab" value="${esc(item.repo || "")}" placeholder="group/project" /></label>
       <label>${t(lang, "event")}<select id="route-gitlab">${["merge_request", "push", "note"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <ul class="secrets">${CHANNEL_NEEDS.gitlab.secrets.map((name) => `<li><strong>${name}</strong><span>${t(lang, "secret_after_save")}</span></li>`).join("")}</ul>
+      <p class="hint">${t(lang, "gitlab_hint")}</p>
     </div>
     <div class="assist" data-for="bitbucket"${show("bitbucket")}>
+      <label>${t(lang, "repository")}<input id="repo-bitbucket" value="${esc(item.repo || "")}" placeholder="workspace/repo" /></label>
       <label>${t(lang, "event")}<select id="route-bitbucket">${["pull_request", "push"].map((event) => `<option ${item.route === event ? "selected" : ""}>${event}</option>`).join("")}</select></label>
+      <ul class="secrets">${CHANNEL_NEEDS.bitbucket.secrets.map((name) => `<li><strong>${name}</strong><span>${t(lang, "secret_after_save")}</span></li>`).join("")}</ul>
+      <p class="hint">${t(lang, "bitbucket_hint")}</p>
     </div>
     <label>${t(lang, "note")}<textarea id="extra">${esc(item.body)}</textarea></label>${foot}`;
 }
@@ -397,11 +419,14 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   const localLabel = local.phase === "building" ? t(lang, "building") : local.phase === "rebuilding" ? t(lang, "rebuilding") : local.phase === "stopping" ? t(lang, "stopping") : local.phase === "checking" ? t(lang, "checking") : local.phase === "tunnel" ? t(lang, "opening_tunnel") : local.phase === "webhook" ? t(lang, "registering") : local.docker === "down" ? t(lang, "docker_off") : local.running ? t(lang, "running") : t(lang, "stopped");
   const delivery = project ? deliveryCheck(project.root) : [];
   const telegram = project?.items.some((item) => item.kind === "channel" && item.description === "telegram") ?? false;
+  const whatsapp = project?.items.some((item) => item.kind === "channel" && item.description === "whatsapp") ?? false;
   const telegramProblems = project && telegram ? telegramReach(project.root) : [];
+  const whatsappProblems = project && whatsapp ? whatsappReach(project.root) : [];
   const problems = project
     ? [
         ...delivery.map((finding) => phrase(lang, finding.message)),
         ...telegramProblems.map((finding) => phrase(lang, finding.message)),
+        ...whatsappProblems.map((finding) => phrase(lang, finding.message)),
         ...review(project).map((finding) => phrase(lang, finding.message)),
         ...project.secrets.filter((secret) => !secret.configured).map((secret) => phrase(lang, `${secret.name} is empty. Set it in Secrets.`)),
       ]
@@ -409,7 +434,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   const deploy = project
     ? `<div class="sheet fill"><p class="kicker">${t(lang, "one_image")}</p><h2>${t(lang, "ship")}</h2><p class="hint">${t(lang, "ship_hint")}</p>
         <div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span class="statusline">${busy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(localLabel)}</span></span><strong>${t(lang, "local")}</strong></header><p>${esc(phrase(lang, local.summary))}</p><p class="path">${local.running ? t(lang, "playground_ready") : t(lang, "playground_after")} · http://127.0.0.1:3000/playground</p>
-          <div class="row"><button type="button" id="ship-start" class="primary" ${local.docker === "down" || busy || delivery.length ? "disabled" : ""}>${t(lang, "start")}</button><button type="button" id="open-playground" ${local.running && !busy ? "" : "disabled"}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${local.docker === "down" || busy || delivery.length ? "disabled" : ""}>${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${local.running || local.phase === "building" || local.phase === "rebuilding" ? "" : "disabled"}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${busy ? "disabled" : ""}>${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
+          <div class="row"><button type="button" id="ship-start" class="primary" ${local.docker !== "ready" || busy || delivery.length ? "disabled" : ""}>${t(lang, "start")}</button><button type="button" id="open-playground" ${local.running && !busy ? "" : "disabled"}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${local.docker !== "ready" || busy || delivery.length ? "disabled" : ""}>${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${local.running || local.phase === "building" || local.phase === "rebuilding" ? "" : "disabled"}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${busy ? "disabled" : ""}>${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
           <p class="hint">${t(lang, "rebuild_hint")}</p>
           ${delivery.length ? `<p class="hint">${t(lang, "start_off")}</p>` : ""}
         </div>
@@ -424,12 +449,37 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         <p class="hint">${t(lang, "ship_foot")}</p>
         <div class="row"><button type="button" id="rewrite-docker">${t(lang, "rewrite_docker")}</button><button type="button" id="run-validate">${t(lang, "check_project")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div></div>`
     : "";
-  const otherChannels = project ? project.items.filter((item) => item.kind === "channel" && item.description !== "telegram") : [];
+  const otherChannels = project ? project.items.filter((item) => item.kind === "channel" && !["telegram", "whatsapp", "slack", "github", "gitlab", "bitbucket"].includes(item.description || "")) : [];
+  const slack = project?.items.some((item) => item.kind === "channel" && item.description === "slack") ?? false;
+  const github = project?.items.some((item) => item.kind === "channel" && item.description === "github") ?? false;
+  const gitlab = project?.items.some((item) => item.kind === "channel" && item.description === "gitlab") ?? false;
+  const bitbucket = project?.items.some((item) => item.kind === "channel" && item.description === "bitbucket") ?? false;
+  const slackProblems = project && slack ? slackReach(project.root) : [];
+  const githubProblems = project && github ? hookSecretReach(project.root, "github") : [];
+  const gitlabProblems = project && gitlab ? hookSecretReach(project.root, "gitlab") : [];
+  const bitbucketProblems = project && bitbucket ? hookSecretReach(project.root, "bitbucket") : [];
+  const packCard = (title: string, text: string, problems: { message: string }[], extra = "") =>
+    `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>${title}</strong></header><p>${text}</p>${extra}${problems.length ? `<p class="hint">${esc(phrase(lang, problems[0].message))}</p>` : ""}</div>`;
+  const repoBlock = (type: string) => {
+    const item = project?.items.find((entry) => entry.kind === "channel" && entry.description === type);
+    const need = CHANNEL_NEEDS[type];
+    const names = (need?.secrets || []).map((name) => `<li><strong>${name}</strong></li>`).join("");
+    const repo = need?.repo ? (item?.repo ? `<p class="path">${esc(item.repo)}</p>` : `<p class="hint">${t(lang, "repo_missing")}</p>`) : "";
+    return `${repo}<ul class="secrets">${names}</ul>`;
+  };
   const connect = project
     ? `<div class="sheet fill"><p class="kicker">${t(lang, "outside")}</p><h2>${t(lang, "connect")}</h2><p class="hint">${t(lang, "connect_hint")}</p>
-        ${telegram ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>Telegram</strong></header><p>${t(lang, "telegram_setup")}</p><label>${t(lang, "public_address")}<input id="public-url" value="${esc(local.publicUrl)}" placeholder="https://name.trycloudflare.com" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="ship-tunnel" ${busy ? "disabled" : ""}>${t(lang, "open_tunnel")}</button><button type="button" id="ship-webhook" class="primary" ${busy || !local.running || telegramProblems.length ? "disabled" : ""}>${t(lang, "register_webhook")}</button></div>${telegramProblems.length ? `<p class="hint">${t(lang, "register_off")}</p>` : ""}</div>` : `<p class="hint">${t(lang, "add_channel")}</p>`}
+        ${telegram || whatsapp ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>${t(lang, "public_address")}</strong></header><p>${t(lang, "public_shared")}</p><label>${t(lang, "public_address")}<input id="public-url" value="${esc(local.publicUrl)}" placeholder="https://name.trycloudflare.com" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="ship-tunnel" ${busy ? "disabled" : ""}>${t(lang, "open_tunnel")}</button></div></div>` : ""}
+        ${telegram ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>Telegram</strong></header><p>${t(lang, "telegram_setup")}</p><div class="row"><button type="button" id="ship-webhook" class="primary" ${busy || !local.running || telegramProblems.length ? "disabled" : ""}>${t(lang, "register_webhook")}</button></div>${telegramProblems.length ? `<p class="hint">${t(lang, "register_off")}</p>` : ""}</div>` : ""}
+        ${whatsapp ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>WhatsApp</strong></header><p>${t(lang, "whatsapp_setup")}</p><div class="row"><button type="button" id="whatsapp-check" ${busy || whatsappProblems.length ? "disabled" : ""}>${t(lang, "whatsapp_check")}</button></div><label>${t(lang, "whatsapp_to")}<input id="whatsapp-to" placeholder="573001112233" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="whatsapp-send" class="primary" ${busy || whatsappProblems.length ? "disabled" : ""}>${t(lang, "whatsapp_send")}</button></div>${whatsappProblems.length ? `<p class="hint">${t(lang, "whatsapp_off")}</p>` : ""}</div>` : ""}
+        ${slack ? packCard("Slack", t(lang, "slack_setup"), slackProblems, `<div class="row"><button type="button" id="slack-check" ${busy || slackProblems.length ? "disabled" : ""}>${t(lang, "slack_check")}</button></div>`) : ""}
+        ${github ? packCard("GitHub", t(lang, "github_setup"), githubProblems, repoBlock("github")) : ""}
+        ${gitlab ? packCard("GitLab", t(lang, "gitlab_setup"), gitlabProblems, repoBlock("gitlab")) : ""}
+        ${bitbucket ? packCard("Bitbucket", t(lang, "bitbucket_setup"), bitbucketProblems, repoBlock("bitbucket")) : ""}
+        ${!telegram && !whatsapp && !slack && !github && !gitlab && !bitbucket ? `<p class="hint">${t(lang, "add_channel")}</p>` : ""}
         ${otherChannels.map((item) => `<article class="env"><header><span>${t(lang, "channel")}</span><strong>${esc(item.name)}</strong></header><p>${t(lang, "channel_later")}</p></article>`).join("")}
-        ${telegramProblems.length ? `<ul class="work">${telegramProblems.map((finding) => `<li><p>${esc(phrase(lang, finding.message))}</p></li>`).join("")}</ul>` : ""}</div>`
+        ${telegramProblems.length ? `<ul class="work">${telegramProblems.map((finding) => `<li><p>${esc(phrase(lang, finding.message))}</p></li>`).join("")}</ul>` : ""}
+        ${whatsappProblems.length ? `<ul class="work">${whatsappProblems.map((finding) => `<li><p>${esc(phrase(lang, finding.message))}</p></li>`).join("")}</ul>` : ""}</div>`
     : "";
   const prove = project
     ? `<div class="sheet wide"><p class="kicker">${t(lang, "fixed_cases")}</p><h2>${t(lang, "prove")}</h2><p class="hint">${t(lang, "prove_hint")}</p>
@@ -640,6 +690,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       checking: t(lang, "checking"),
       opening: t(lang, "opening_tunnel"),
       registering: t(lang, "registering"),
+      sending: t(lang, "whatsapp_send"),
       phName: t(lang, "ph_name"),
       required: t(lang, "required"),
       phMeans: t(lang, "ph_means"),
@@ -687,6 +738,9 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     document.getElementById("restore-folder")?.addEventListener("click", () => vscode.postMessage({ type: "restore-folder" }));
     document.getElementById("ship-tunnel")?.addEventListener("click", () => { arm(uiText.opening); vscode.postMessage({ type: "ship", task: "tunnel" }); });
     document.getElementById("ship-webhook")?.addEventListener("click", () => { arm(uiText.registering); vscode.postMessage({ type: "ship", task: "webhook", url: document.getElementById("public-url")?.value || "" }); });
+    document.getElementById("whatsapp-check")?.addEventListener("click", () => { arm(uiText.checking); vscode.postMessage({ type: "ship", task: "whatsapp-check" }); });
+    document.getElementById("whatsapp-send")?.addEventListener("click", () => { arm(uiText.sending); vscode.postMessage({ type: "ship", task: "whatsapp-send", phone: document.getElementById("whatsapp-to")?.value || "" }); });
+    document.getElementById("slack-check")?.addEventListener("click", () => { arm(uiText.checking); vscode.postMessage({ type: "ship", task: "slack-check" }); });
     function arm(label) {
       const line = document.querySelector(".localbar .statusline");
       if (line && !line.querySelector(".spin")) {
@@ -695,7 +749,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         if (text) text.textContent = label;
       }
       for (const bar of document.querySelectorAll(".localbar")) bar.setAttribute("aria-busy", "true");
-      for (const id of ["ship-start", "ship-rebuild", "ship-refresh", "ship-tunnel", "ship-webhook"]) {
+      for (const id of ["ship-start", "ship-rebuild", "ship-refresh", "ship-tunnel", "ship-webhook", "whatsapp-check", "whatsapp-send", "slack-check"]) {
         const button = document.getElementById(id);
         if (button) button.disabled = true;
       }
@@ -792,7 +846,8 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         verify: document.getElementById("field")?.value === "telegram" ? Boolean(document.getElementById("verify-telegram")?.checked) : Boolean(document.getElementById("verify")?.checked),
         url: document.getElementById("url")?.value || "",
         route: channelRoute(),
-        secret: document.getElementById("field")?.value === "telegram" ? (document.getElementById("secret-telegram")?.value || "") : (document.getElementById("secret")?.value || ""),
+        repo: document.getElementById("repo-" + (document.getElementById("field")?.value || ""))?.value || "",
+        secret: document.getElementById("field")?.value === "telegram" ? (document.getElementById("secret-telegram")?.value || "") : document.getElementById("field")?.value === "whatsapp" ? (document.getElementById("secret-whatsapp")?.value || "") : (document.getElementById("secret")?.value || ""),
         calls: document.getElementById("call-mcp")?.value || document.getElementById("calls")?.value || "",
         parameters,
       });

@@ -3,6 +3,7 @@
 // the TypeScript, the local sandbox stays off, a trigger that does not reach
 // Agent does not call the model, and Telegram registration rejects an illegal secret.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { designerHtml, type Ui } from "./designer";
 import { copy, phrase } from "./copy";
-import { arrange, captureFolder, createProject, deleteItem, deliveryCheck, ensureStudioFile, executionSteps, flowLinks, initWorkspace, keepWorkspace, linksExcept, loadExample, loadProject, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, telegramReach, telegramSetWebhookTarget, toggleLink, writeEvalCase, writeLayout } from "./project";
+import { arrange, captureFolder, CHANNEL_NEEDS, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
 
 test("an agent folder keeps secrets out of the image", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
@@ -475,4 +476,370 @@ test("the language switch changes labels and leaves the controls alone", () => {
   assert.match(examples, /data-example="hello"/);
   assert.match(examples, /data-example="telegram-desk"/);
   assert.match(examples, />Cargar</);
+});
+
+test("whatsapp verifies with Meta and the token stays out of the url", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  createProject(root, "Desk");
+  saveItem(root, { kind: "channel", name: "whatsapp", description: "whatsapp", body: "A person writes.", verify: true, route: "/", secret: "WHATSAPP_VERIFY_TOKEN" });
+  const token = "aaaaaaaaaaaaaaaaaaaa";
+  setSecret(root, "WHATSAPP_TOKEN", token);
+  setSecret(root, "WHATSAPP_PHONE_NUMBER_ID", "abc");
+  setSecret(root, "WHATSAPP_VERIFY_TOKEN", "mesa-local");
+  assert.equal(whatsappReach(root).some((finding) => finding.id === "whatsapp-phone"), true);
+  assert.equal(whatsappReach(root).map((finding) => finding.message).join("\n").includes(token), false);
+  const channel = fs.readFileSync(path.join(root, "bot", "channels", "whatsapp.ts"), "utf8");
+  assert.match(channel, /hub\.verify_token/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "lib", "whatsapp.ts"), "utf8"), /graph\.facebook\.com/);
+  assert.match(channel, /zod\/v4/);
+  assert.match(channel, /x-hub-signature-256/);
+  assert.equal(channel.includes(token), false);
+  assert.deepEqual(deliveryCheck(root), []);
+  const ui: Ui = { mode: "connect", selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+  const layout = readLayout(root);
+  const html = designerHtml(loadProject(root), ui, true, undefined, "", layout, layout);
+  assert.match(html, /Send a test/);
+  assert.match(html, /id="whatsapp-send"[^>]*disabled/);
+  const spanish = designerHtml(loadProject(root), { ...ui, lang: "es" }, true, undefined, "", layout, layout);
+  assert.match(spanish, /Enviar prueba/);
+  assert.match(spanish, /id="whatsapp-send"/);
+  const check = whatsappCheckTarget(token, "123456");
+  if ("error" in check) throw new Error(check.error);
+  assert.equal(check.endpoint.includes(token), false);
+  assert.match(check.authorization, /Bearer /);
+  const sent = whatsappSendTarget(token, "123456", "+57 300 111 2233");
+  if ("error" in sent) throw new Error(sent.error);
+  assert.equal(sent.endpoint.includes(token), false);
+  assert.match(sent.body, /"to":"573001112233"/);
+  assert.match(sent.body, /hello/);
+  assert.match(fs.readFileSync(path.join(root, "AGENTS.md"), "utf8"), /save-gap/);
+});
+
+test("slack github gitlab and bitbucket write the sdk channel and a bad slack token keeps check off", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  createProject(root, "Desk");
+  saveItem(root, { kind: "channel", name: "room", description: "slack", body: "A mention", verify: false, route: "message" });
+  saveItem(root, { kind: "channel", name: "prs", description: "github", body: "A pull request", verify: true, route: "pull_request", secret: "GITHUB_WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "mrs", description: "gitlab", body: "A note", verify: true, route: "note", secret: "GITLAB_WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "bbs", description: "bitbucket", body: "A pull request", verify: true, route: "pull_request", secret: "BITBUCKET_WEBHOOK_SECRET" });
+  assert.match(fs.readFileSync(path.join(root, "bot", "channels", "room.ts"), "utf8"), /slackChannel/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "channels", "prs.ts"), "utf8"), /githubChannel/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "channels", "prs.ts"), "utf8"), /onPullRequest/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "channels", "mrs.ts"), "utf8"), /onNote/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "channels", "bbs.ts"), "utf8"), /bitbucketChannel/);
+  assert.equal(slackReach(root).some((finding) => finding.id === "slack-bot"), true);
+  const check = slackCheckTarget("xoxb-not-the-real-value");
+  if ("error" in check) throw new Error(check.error);
+  assert.equal(check.endpoint.includes("xoxb-"), false);
+  const ui: Ui = { mode: "connect", selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+  const html = designerHtml(loadProject(root), ui, true, undefined, "", readLayout(root), readLayout(root));
+  assert.match(html, /id="slack-check"[^>]*disabled/);
+  assert.match(html, /GitHub/);
+  assert.match(html, /GitLab/);
+  assert.match(html, /Bitbucket/);
+  fs.writeFileSync(path.join(root, "channels", "desk.json"), JSON.stringify({ type: "whatsapp", description: "A WhatsApp message", verify: true, route: "/", secret: "WHATSAPP_VERIFY_TOKEN" }), "utf8");
+  fs.writeFileSync(path.join(root, "tools", "lookup.json"), JSON.stringify({ description: "Find a passage", effect: "read", calls: "mcp:knowledge", procedure: "return input;" }), "utf8");
+  fs.writeFileSync(path.join(root, "mcp-connections", "knowledge.json"), JSON.stringify({ url: "http://127.0.0.1:7000/knowledge", description: "The knowledge base", transport: "http" }), "utf8");
+  emitSdk(root);
+  assert.match(fs.readFileSync(path.join(root, "bot", "channels", "desk.ts"), "utf8"), /hub\.verify_token/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "tools", "lookup.ts"), "utf8"), /mcp:knowledge|Find a passage/);
+  assert.match(fs.readFileSync(path.join(root, "AGENTS.md"), "utf8"), /save-gap/);
+});
+
+test("each host flow can be finished from the card, the secrets page, and connect", () => {
+  const flows = [
+    { type: "github", route: "pull_request", repo: "acme/app" },
+    { type: "gitlab", route: "note", repo: "acme/app" },
+    { type: "bitbucket", route: "pull_request", repo: "acme/app" },
+  ] as const;
+  for (const flow of flows) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+    createProject(root, "Desk");
+    saveItem(root, { kind: "channel", name: "gate", description: flow.type, body: "A review", verify: true, route: flow.route, secret: CHANNEL_NEEDS[flow.type].secrets[0] });
+    assert.equal(flowGaps(loadProject(root)).some((gap) => gap.message.includes("repository")), true, flow.type);
+    const selected = designerHtml(loadProject(root), { mode: "flow", selected: "channel:gate", notice: "", libraryOpen: true, inspectorOpen: true, libraryWidth: 240, inspectorWidth: 300 }, true, undefined, "", readLayout(root), readLayout(root));
+    assert.match(selected, new RegExp(`id="repo-${flow.type}"`), flow.type);
+    for (const secret of CHANNEL_NEEDS[flow.type].secrets) assert.match(selected, new RegExp(secret), `${flow.type} ${secret}`);
+    saveItem(root, { kind: "channel", name: "gate", description: flow.type, body: "A review", verify: true, route: flow.route, secret: CHANNEL_NEEDS[flow.type].secrets[0], repo: flow.repo });
+    const project = loadProject(root);
+    assert.deepEqual(flowGaps(project), [], flow.type);
+    for (const secret of CHANNEL_NEEDS[flow.type].secrets) {
+      assert.equal(project.secrets.some((row) => row.name === secret), true, secret);
+    }
+    const page = { mode: "secrets" as const, selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+    const secrets = designerHtml(project, page, true, undefined, "", readLayout(root), readLayout(root));
+    for (const secret of CHANNEL_NEEDS[flow.type].secrets) assert.match(secrets, new RegExp(secret), secret);
+    const connect = designerHtml(project, { ...page, mode: "connect" }, true, undefined, "", readLayout(root), readLayout(root));
+    assert.match(connect, /acme\/app/, flow.type);
+    assert.match(fs.readFileSync(path.join(root, "bot", "channels", "gate.ts"), "utf8"), /acme\/app/, flow.type);
+  }
+});
+
+test("every component and every trigger option can be finished from its card", () => {
+  const seenKinds = new Set<string>(["agent", "limits"]);
+  const seenTypes = new Set<string>();
+  const card = (root: string, selected: string) =>
+    designerHtml(
+      loadProject(root),
+      { mode: "flow", selected, notice: "", libraryOpen: true, inspectorOpen: true, libraryWidth: 240, inspectorWidth: 320 },
+      true,
+      undefined,
+      "",
+      readLayout(root),
+      readLayout(root),
+    );
+  const fresh = (name: string) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+    createProject(root, name);
+    return root;
+  };
+  const panel = (html: string, type: string) => {
+    const at = html.indexOf(`data-for="${type}"`);
+    assert.ok(at >= 0, type);
+    const rest = html.slice(at);
+    const next = rest.indexOf("data-for=", 12);
+    return next < 0 ? rest : rest.slice(0, next);
+  };
+
+  const agent = fresh("Desk");
+  const agentCard = card(agent, "agent");
+  for (const id of ["model", "effort", "fast", "sandbox", "instructions", "save-agent"]) assert.match(agentCard, new RegExp(`id="${id}"`), id);
+  const limitsCard = card(agent, "scope");
+  assert.match(limitsCard, /id="scope"/);
+  assert.match(limitsCard, /id="save-scope"/);
+
+  const tool = fresh("Desk");
+  saveItem(tool, { kind: "tool", name: "lookup", description: "Find", body: "", calls: "" });
+  assert.equal(review(loadProject(tool)).some((finding) => finding.id === "tool:lookup"), true);
+  const toolCard = card(tool, "tool:lookup");
+  for (const id of ["calls", "effect", "execution", "procedure", "secret", "add-param"]) assert.match(toolCard, new RegExp(`id="${id}"`), id);
+  saveItem(tool, { kind: "tool", name: "lookup", description: "Find", body: "return input;", calls: "POST /search", secret: "LOOKUP_TOKEN", effect: "read" });
+  assert.equal(review(loadProject(tool)).some((finding) => finding.id === "tool:lookup"), false);
+  assert.equal(loadProject(tool).secrets.some((row) => row.name === "LOOKUP_TOKEN"), true);
+  seenKinds.add("tool");
+
+  const skill = fresh("Desk");
+  saveItem(skill, { kind: "skill", name: "hand-off", description: "", body: "" });
+  assert.equal(review(loadProject(skill)).some((finding) => finding.id === "skill:hand-off"), true);
+  assert.match(card(skill, "skill:hand-off"), /id="when"/);
+  saveItem(skill, { kind: "skill", name: "hand-off", description: "the lookup found nothing", body: "Offer a person.\n" });
+  assert.equal(review(loadProject(skill)).some((finding) => finding.id === "skill:hand-off"), false);
+  seenKinds.add("skill");
+
+  const server = fresh("Desk");
+  saveItem(server, { kind: "mcp", name: "knowledge", description: "The base", body: "", transport: "http" });
+  assert.equal(review(loadProject(server)).some((finding) => finding.message.includes("no URL")), true);
+  const serverCard = card(server, "mcp:knowledge");
+  for (const id of ["url", "command", "secret", "transport", "advertise"]) assert.match(serverCard, new RegExp(`id="${id}"`), id);
+  assert.match(serverCard, /value="account"/);
+  saveItem(server, { kind: "mcp", name: "knowledge", description: "The base", body: "", transport: "http", url: "http://127.0.0.1:7000/knowledge", secret: "MCP_TOKEN" });
+  assert.equal(review(loadProject(server)).some((finding) => finding.id === "mcp:knowledge"), false);
+  assert.equal(loadProject(server).secrets.some((row) => row.name === "MCP_TOKEN"), true);
+  seenKinds.add("mcp");
+
+  const local = fresh("Desk");
+  saveItem(local, { kind: "mcp", name: "local", description: "A process", body: "", transport: "stdio" });
+  assert.equal(review(loadProject(local)).some((finding) => finding.message.includes("no command")), true);
+  saveItem(local, { kind: "mcp", name: "local", description: "A process", body: "", transport: "stdio", command: "node" });
+  assert.equal(review(loadProject(local)).some((finding) => finding.id === "mcp:local"), false);
+  assert.match(fs.readFileSync(path.join(local, "bot", "mcp-connections", "local.ts"), "utf8"), /command: "node"/);
+
+  const account = fresh("Desk");
+  saveItem(account, { kind: "mcp", name: "cursor", description: "The account", body: "", transport: "account" });
+  assert.equal(review(loadProject(account)).some((finding) => finding.id === "mcp:cursor"), false);
+  assert.match(fs.readFileSync(path.join(account, "bot", "mcp-connections", "cursor.ts"), "utf8"), /cursorAccount: true/);
+
+  const host = fresh("Desk");
+  saveItem(host, { kind: "host", name: "private", description: "Hidden", body: "", transport: "http" });
+  assert.equal(review(loadProject(host)).some((finding) => finding.message.includes("no URL")), true);
+  assert.match(card(host, "host:private"), /id="url"/);
+  saveItem(host, { kind: "host", name: "private", description: "Hidden", body: "", transport: "http", url: "http://127.0.0.1:7001" });
+  assert.equal(review(loadProject(host)).some((finding) => finding.id === "host:private"), false);
+  assert.match(fs.readFileSync(path.join(host, "bot", "host-connections", "private.ts"), "utf8"), /127\.0\.0\.1:7001/);
+  seenKinds.add("host");
+
+  const clock = fresh("Desk");
+  saveItem(clock, { kind: "schedule", name: "monday", description: "Weekly", body: "" });
+  assert.equal(review(loadProject(clock)).some((finding) => finding.id === "schedule:monday"), true);
+  assert.match(card(clock, "schedule:monday"), /id="route-cron"/);
+  saveItem(clock, { kind: "schedule", name: "monday", description: "Weekly", body: "", route: "0 9 * * 1" });
+  assert.equal(review(loadProject(clock)).some((finding) => finding.id === "schedule:monday"), false);
+  assert.match(fs.readFileSync(path.join(clock, "bot", "schedules", "monday.md"), "utf8"), /0 9 \* \* 1/);
+  seenKinds.add("schedule");
+
+  const delegate = fresh("Desk");
+  saveItem(delegate, { kind: "subagent", name: "reviewer", description: "", body: "" });
+  assert.equal(review(loadProject(delegate)).some((finding) => finding.id === "subagent:reviewer"), true);
+  assert.match(card(delegate, "subagent:reviewer"), /id="when"/);
+  saveItem(delegate, { kind: "subagent", name: "reviewer", description: "a pull request needs a second pass", body: "Look again.\n" });
+  assert.equal(review(loadProject(delegate)).some((finding) => finding.id === "subagent:reviewer"), false);
+  seenKinds.add("subagent");
+
+  const watch = fresh("Desk");
+  saveItem(watch, { kind: "hook", name: "log", description: "", body: "" });
+  const hookCard = card(watch, "hook:log");
+  for (const event of ["message.received", "turn.completed", "turn.failed", "actions.requested", "actions.completed", "action.result"]) {
+    assert.match(hookCard, new RegExp(event), event);
+  }
+  saveItem(watch, { kind: "hook", name: "log", description: "turn.completed", body: "return;" });
+  assert.equal(review(loadProject(watch)).some((finding) => finding.id === "hook:log"), false);
+  assert.match(fs.readFileSync(path.join(watch, "bot", "hooks", "log.ts"), "utf8"), /turn\.completed/);
+  seenKinds.add("hook");
+
+  const triggers: { type: (typeof TRIGGER_TYPES)[number]; route: string; repo?: string; file: string; mark: RegExp }[] = [
+    { type: "telegram", route: "/", file: "bot/channels/gate.ts", mark: /replyTelegram/ },
+    { type: "whatsapp", route: "/", file: "bot/channels/gate.ts", mark: /hub\.verify_token/ },
+    { type: "webhook", route: "", file: "bot/channels/gate.ts", mark: /POST/ },
+    { type: "slack", route: "message", file: "bot/channels/gate.ts", mark: /slackChannel/ },
+    { type: "github", route: "pull_request", repo: "acme/app", file: "bot/channels/gate.ts", mark: /acme\/app/ },
+    { type: "gitlab", route: "note", repo: "acme/app", file: "bot/channels/gate.ts", mark: /acme\/app/ },
+    { type: "bitbucket", route: "pull_request", repo: "acme/app", file: "bot/channels/gate.ts", mark: /acme\/app/ },
+    { type: "cron", route: "", file: "bot/schedules/gate.md", mark: /0 9 \* \* 1/ },
+  ];
+  for (const trigger of triggers) {
+    const root = fresh("Desk");
+    saveItem(root, { kind: "channel", name: "gate", description: trigger.type, body: "A message", verify: true, route: trigger.route, secret: "WEBHOOK_SECRET" });
+    const html = card(root, "channel:gate");
+    const piece = panel(html, trigger.type);
+    assert.match(piece, new RegExp(`^data-for="${trigger.type}">`), trigger.type);
+    for (const secret of CHANNEL_NEEDS[trigger.type]?.secrets || []) assert.match(piece, new RegExp(secret), `${trigger.type} ${secret}`);
+    if (trigger.repo) {
+      assert.match(piece, new RegExp(`id="repo-${trigger.type}"`), trigger.type);
+      assert.equal(flowGaps(loadProject(root)).some((gap) => gap.message.includes("repository")), true, trigger.type);
+      saveItem(root, { kind: "channel", name: "gate", description: trigger.type, body: "A message", verify: true, route: trigger.route, secret: "WEBHOOK_SECRET", repo: trigger.repo });
+    }
+    if (trigger.type === "webhook") {
+      assert.match(piece, /id="route"/);
+      assert.match(piece, /id="secret"/);
+      assert.equal(review(loadProject(root)).some((finding) => finding.message.includes("no endpoint")), true);
+      saveItem(root, { kind: "channel", name: "gate", description: "webhook", body: "A message", verify: true, route: "/hooks/inbox", secret: "WEBHOOK_SECRET" });
+      assert.equal(loadProject(root).secrets.some((row) => row.name === "WEBHOOK_SECRET"), true);
+    }
+    if (trigger.type === "cron") {
+      assert.match(piece, /id="route-cron"/);
+      assert.equal(review(loadProject(root)).some((finding) => finding.message.includes("cron")), true);
+      saveItem(root, { kind: "channel", name: "gate", description: "cron", body: "Weekly", verify: false, route: "0 9 * * 1" });
+    }
+    assert.match(fs.readFileSync(path.join(root, trigger.file), "utf8"), trigger.mark, trigger.type);
+    assert.deepEqual(deliveryCheck(root), [], trigger.type);
+    seenTypes.add(trigger.type);
+    seenKinds.add("channel");
+  }
+
+  for (const kind of LIBRARY_KINDS) assert.ok(seenKinds.has(kind), kind);
+  for (const type of TRIGGER_TYPES) assert.ok(seenTypes.has(type), type);
+});
+
+test("a folder with every component is one the Agent SDK can typecheck", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  createProject(root, "Whole");
+  saveScope(root, "Refuse money.");
+  saveItem(root, { kind: "tool", name: "lookup", description: "Find a passage", body: "return input;", calls: "mcp:knowledge", effect: "read", secret: "LOOKUP_TOKEN" });
+  saveItem(root, { kind: "skill", name: "when-empty", description: "the lookup found nothing", body: "Call save-gap.\n" });
+  saveItem(root, { kind: "tool", name: "save-gap", description: "Store the question", body: "return input;", calls: "http://127.0.0.1:7000/gaps", effect: "write" });
+  saveItem(root, { kind: "mcp", name: "knowledge", description: "The knowledge base", body: "", transport: "http", url: "http://127.0.0.1:7000/knowledge" });
+  saveItem(root, { kind: "host", name: "private", description: "Hidden", body: "", transport: "http", url: "http://127.0.0.1:7001" });
+  saveItem(root, { kind: "schedule", name: "monday", description: "Weekly", body: "", route: "0 9 * * 1" });
+  saveItem(root, { kind: "subagent", name: "reviewer", description: "a second pass", body: "Look again.\n" });
+  saveItem(root, { kind: "hook", name: "log", description: "turn.completed", body: "return;" });
+  saveItem(root, { kind: "channel", name: "telegram", description: "telegram", body: "A chat", verify: true, route: "/", secret: "TELEGRAM_WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "whatsapp", description: "whatsapp", body: "A chat", verify: true, route: "/", secret: "WHATSAPP_VERIFY_TOKEN" });
+  saveItem(root, { kind: "channel", name: "slack", description: "slack", body: "A mention", verify: false, route: "message" });
+  saveItem(root, { kind: "channel", name: "github", description: "github", body: "A pull request", verify: true, route: "pull_request", repo: "acme/app", secret: "GITHUB_WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "gitlab", description: "gitlab", body: "A note", verify: true, route: "note", repo: "acme/app", secret: "GITLAB_WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "bitbucket", description: "bitbucket", body: "A pull request", verify: true, route: "pull_request", repo: "acme/app", secret: "BITBUCKET_WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "inbox", description: "webhook", body: "A message", verify: true, route: "/hooks/inbox", secret: "WEBHOOK_SECRET" });
+  saveItem(root, { kind: "channel", name: "monday-note", description: "cron", body: "Weekly", verify: false, route: "0 9 * * 1" });
+  assert.deepEqual(deliveryCheck(root), []);
+  assert.deepEqual(flowGaps(loadProject(root)).filter((gap) => gap.message.includes("repository")), []);
+
+  const extensionModules = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../node_modules");
+  const tsc = path.join(extensionModules, "typescript", "bin", "tsc");
+  assert.equal(fs.existsSync(tsc), true, "npm install must include typescript so the generated folder can be typechecked");
+  assert.equal(fs.existsSync(path.join(extensionModules, "@grok", "agent-sdk", "package.json")), true, "npm install must include @grok/agent-sdk");
+  fs.symlinkSync(extensionModules, path.join(root, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+  fs.writeFileSync(
+    path.join(root, "tsconfig.json"),
+    JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+          types: ["node"],
+        },
+        include: ["bot/**/*.ts"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  const ran = spawnSync(process.execPath, [tsc, "--noEmit", "--pretty", "false"], { cwd: root, encoding: "utf8" });
+  assert.equal(ran.status, 0, `${ran.stdout}\n${ran.stderr}`);
+});
+
+test("a person can go from an empty folder through the canvas to ship", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  assert.equal(scanWorkspace(root).missing.some((piece) => piece.id === "marker"), true);
+  assert.throws(() => initWorkspace(root, "!!!"), /short name/);
+
+  const project = initWorkspace(root, "Desk");
+  assert.equal(project.think, true);
+  assert.equal(project.limits, true);
+  assert.equal(project.secrets.some((row) => row.name === "CURSOR_API_KEY"), true);
+  assert.deepEqual(deliveryCheck(root), []);
+  assert.match(fs.readFileSync(path.join(root, "compose.yaml"), "utf8"), /127\.0\.0\.1:3000:3000/);
+  assert.match(fs.readFileSync(path.join(root, "compose.yaml"), "utf8"), /BIGAGENT_ADMIT_LOCAL/);
+  assert.equal(fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8").includes("sandbox: true"), false);
+
+  saveAgentSettings(root, { model: "composer-2.5", effort: "low", fast: false, sandbox: true, reminders: true, harness: ["read", "shell"], maxRunningTurns: 2, egress: ["example.com"] });
+  const tuned = loadProject(root);
+  assert.equal(tuned.model, "composer-2.5");
+  assert.equal(tuned.effort, "low");
+  assert.equal(tuned.fast, false);
+  assert.equal(tuned.sandbox, true);
+  assert.equal(review(tuned).some((finding) => finding.id === "sandbox"), true);
+  assert.equal(fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8").includes("sandbox: true"), false);
+
+  const shot = captureFolder(root);
+  saveItem(root, { kind: "tool", name: "lookup", description: "Find", body: "return input;", calls: "POST /search", effect: "read" });
+  setSecret(root, "LOOKUP_TOKEN", "not-in-the-image");
+  assert.throws(() => setSecret(root, "bad name", "x"), /CURSOR_API_KEY/);
+  deleteItem(root, "tool", "lookup");
+  assert.equal(loadProject(root).items.some((item) => item.name === "lookup"), false);
+  restoreFolder(root, shot);
+  assert.equal(loadProject(root).items.some((item) => item.name === "lookup"), false);
+  assert.match(fs.readFileSync(path.join(root, ".env"), "utf8"), /LOOKUP_TOKEN=not-in-the-image/);
+  assert.equal(fs.readFileSync(path.join(root, "Dockerfile"), "utf8").includes("not-in-the-image"), false);
+
+  const evalFile = writeEvalCase(root, "in-scope", "How do I reset my password?", "lookup");
+  assert.equal(evalFile, "evals/in-scope.eval.ts");
+  assert.throws(() => writeEvalCase(root, "in-scope", "again", "lookup"), /already has a file/);
+  const studio = ensureStudioFile(root, "lib");
+  assert.equal(studio, "bot/lib/index.ts");
+  assert.equal(fs.existsSync(path.join(root, "bot", "lib", "index.ts")), true);
+
+  const page = { mode: "deploy" as const, selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+  const layout = readLayout(root);
+  const unknown = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "unknown", running: false, phase: "idle", summary: "", logs: "", publicUrl: "" });
+  assert.match(unknown, /id="ship-start"[^>]*disabled/);
+  const stopped = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: false, phase: "idle", summary: "", logs: "", publicUrl: "" });
+  assert.equal(/id="ship-start"[^>]*disabled/.test(stopped), false);
+  assert.match(stopped, /id="open-playground"[^>]*disabled/);
+  assert.match(stopped, /id="ship-stop"[^>]*disabled/);
+  assert.match(stopped, /AWS/);
+  assert.equal(stopped.includes('id="ship-aws"'), false);
+  const running = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: true, phase: "idle", summary: "", logs: "", publicUrl: "" });
+  assert.equal(/id="open-playground"[^>]*disabled/.test(running), false);
+  assert.equal(/id="ship-stop"[^>]*disabled/.test(running), false);
+
+  const examples = designerHtml(loadProject(root), { ...page, mode: "examples" }, true, undefined, "", layout, layout);
+  for (const example of EXAMPLES) assert.match(examples, new RegExp(`data-example="${example.id}"`), example.id);
+  const prove = designerHtml(loadProject(root), { ...page, mode: "prove" }, true, undefined, "", layout, layout, false, readStudio(root));
+  assert.match(prove, /id="eval-form"/);
+  assert.match(prove, /in-scope/);
 });
