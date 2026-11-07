@@ -1,0 +1,8 @@
+{
+  "url": "http://pager:7000/hook",
+  "description": "Pages on a failed review. The model never sees this server.",
+  "secret": "PAGER_TOKEN",
+  "transport": "http",
+  "command": "",
+  "advertise": false
+}

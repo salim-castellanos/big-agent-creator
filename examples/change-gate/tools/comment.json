@@ -1,0 +1,12 @@
+{
+  "description": "Post the review comment. Repeating it with the same text changes nothing.",
+  "calls": "mcp:review-board",
+  "effect": "idempotent",
+  "execution": "server",
+  "secret": "",
+  "procedure": "  return { posted: true, summary: input.summary };",
+  "parameters": [
+    { "name": "prUrl", "type": "string", "required": true, "description": "The pull request URL." },
+    { "name": "summary", "type": "string", "required": true, "description": "The review, in one paragraph." }
+  ]
+}

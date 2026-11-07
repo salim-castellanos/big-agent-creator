@@ -1,0 +1,20 @@
+{
+  "description": "Record a case when the knowledge base has no answer. Does not change the account.",
+  "calls": "mcp:cases",
+  "effect": "write",
+  "secret": "",
+  "parameters": [
+    {
+      "name": "summary",
+      "type": "string",
+      "required": true,
+      "description": "What the customer asked, in one sentence."
+    },
+    {
+      "name": "question",
+      "type": "string",
+      "required": true,
+      "description": "The customer question, unchanged."
+    }
+  ]
+}

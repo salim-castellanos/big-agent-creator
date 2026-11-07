@@ -1,0 +1,14 @@
+{
+  "description": "Find one passage in the knowledge base for the customer question.",
+  "calls": "mcp:knowledge",
+  "effect": "read",
+  "secret": "",
+  "parameters": [
+    {
+      "name": "question",
+      "type": "string",
+      "required": true,
+      "description": "The customer question, unchanged."
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "BigAgentCreator",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/../../playground"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"]
+    }
+  ]
+}

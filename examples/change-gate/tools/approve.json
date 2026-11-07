@@ -1,0 +1,12 @@
+{
+  "description": "Ask a person to approve. You do not merge.",
+  "calls": "mcp:review-board",
+  "effect": "irreversible",
+  "execution": "server",
+  "secret": "",
+  "procedure": "  return { waitingFor: \"person\", prUrl: input.prUrl };",
+  "parameters": [
+    { "name": "prUrl", "type": "string", "required": true, "description": "The pull request URL." },
+    { "name": "verdict", "type": "string", "required": true, "description": "Why a person should approve." }
+  ]
+}

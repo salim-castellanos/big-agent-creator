@@ -1,0 +1,7 @@
+{
+  "type": "webhook",
+  "description": "Someone posts a pull request URL. The signature is checked before the run starts.",
+  "verify": true,
+  "route": "/hooks/review",
+  "secret": "WEBHOOK_SECRET"
+}

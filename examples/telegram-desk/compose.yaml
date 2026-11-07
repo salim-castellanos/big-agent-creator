@@ -1,0 +1,13 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      BIGAGENT_ADMIT_LOCAL: "1"
+    env_file:
+      - .env
+    volumes:
+      - agent-state:/var/lib/agent-sdk
+volumes:
+  agent-state:

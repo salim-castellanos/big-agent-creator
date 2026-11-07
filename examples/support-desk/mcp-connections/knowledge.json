@@ -1,0 +1,6 @@
+{
+  "url": "http://knowledge:7000/mcp",
+  "description": "The document base on the same Docker network. A passage from here is the only allowed answer.",
+  "advertise": true,
+  "transport": "http"
+}

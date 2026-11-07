@@ -1,0 +1,8 @@
+.vscode/**
+src/**
+**/*.map
+media/icon-option-*
+node_modules/**
+tsconfig.json
+.eslintrc*
+**/.gitkeep

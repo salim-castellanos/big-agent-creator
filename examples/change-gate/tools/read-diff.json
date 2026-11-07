@@ -1,0 +1,11 @@
+{
+  "description": "Read the pull request diff. Does not change the repository.",
+  "calls": "mcp:repository",
+  "effect": "read",
+  "execution": "server",
+  "secret": "",
+  "procedure": "  return { prUrl: input.prUrl };",
+  "parameters": [
+    { "name": "prUrl", "type": "string", "required": true, "description": "The pull request URL, unchanged." }
+  ]
+}

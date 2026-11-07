@@ -1,0 +1,100 @@
+{
+  "positions": {
+    "channel:inbox": {
+      "x": 20,
+      "y": 57
+    },
+    "scope": {
+      "x": 300,
+      "y": 80
+    },
+    "agent": {
+      "x": 560,
+      "y": 68
+    },
+    "tool:escalate": {
+      "x": 840,
+      "y": 24
+    },
+    "tool:lookup-passage": {
+      "x": 840,
+      "y": 148
+    },
+    "tool:open-case": {
+      "x": 840,
+      "y": 272
+    },
+    "skill:answer-from-base": {
+      "x": 319,
+      "y": 260
+    },
+    "skill:hand-off": {
+      "x": 300,
+      "y": 424
+    },
+    "schedule:morning": {
+      "x": 36,
+      "y": 220
+    },
+    "mcp:cases": {
+      "x": 1120,
+      "y": 24
+    },
+    "mcp:knowledge": {
+      "x": 1120,
+      "y": 148
+    }
+  },
+  "zoom": 0.6272590361445783,
+  "pan": {
+    "x": 30.654831484139663,
+    "y": 151.14576482198322
+  },
+  "look": "clear",
+  "links": [
+    {
+      "from": "schedule:morning",
+      "to": "scope"
+    },
+    {
+      "from": "channel:inbox",
+      "to": "scope"
+    },
+    {
+      "from": "scope",
+      "to": "agent"
+    },
+    {
+      "from": "agent",
+      "to": "tool:lookup-passage"
+    },
+    {
+      "from": "tool:lookup-passage",
+      "to": "mcp:knowledge"
+    },
+    {
+      "from": "mcp:knowledge",
+      "to": "skill:answer-from-base"
+    },
+    {
+      "from": "mcp:knowledge",
+      "to": "skill:hand-off"
+    },
+    {
+      "from": "skill:hand-off",
+      "to": "tool:open-case"
+    },
+    {
+      "from": "tool:open-case",
+      "to": "mcp:cases"
+    },
+    {
+      "from": "tool:open-case",
+      "to": "tool:escalate"
+    },
+    {
+      "from": "tool:escalate",
+      "to": "mcp:cases"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "url": "http://cases:7000/mcp",
+  "description": "The case queue on the same Docker network. Opening a case records the question. Escalation waits for a person.",
+  "secret": "CASES_TOKEN",
+  "advertise": true,
+  "transport": "http"
+}

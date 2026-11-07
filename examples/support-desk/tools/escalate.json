@@ -1,0 +1,20 @@
+{
+  "description": "Place an open case in the human queue. A person must take it from here.",
+  "calls": "mcp:cases",
+  "effect": "irreversible",
+  "secret": "",
+  "parameters": [
+    {
+      "name": "caseId",
+      "type": "string",
+      "required": true,
+      "description": "The case that was just opened."
+    },
+    {
+      "name": "reason",
+      "type": "string",
+      "required": true,
+      "description": "Why a person has to continue."
+    }
+  ]
+}

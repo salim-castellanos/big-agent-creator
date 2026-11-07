@@ -1,0 +1,144 @@
+{
+  "positions": {
+    "channel:github": {
+      "x": 27,
+      "y": -61
+    },
+    "channel:request": {
+      "x": 25,
+      "y": 129
+    },
+    "channel:telegram": {
+      "x": 23,
+      "y": 458
+    },
+    "scope": {
+      "x": 300,
+      "y": 80
+    },
+    "agent": {
+      "x": 560,
+      "y": 68
+    },
+    "tool:approve": {
+      "x": 840,
+      "y": 24
+    },
+    "tool:comment": {
+      "x": 840,
+      "y": 148
+    },
+    "tool:read-diff": {
+      "x": 840,
+      "y": 272
+    },
+    "skill:dependency-bump": {
+      "x": 300,
+      "y": 300
+    },
+    "skill:product-change": {
+      "x": 300,
+      "y": 424
+    },
+    "schedule:weekday": {
+      "x": 26,
+      "y": 285
+    },
+    "subagent:security-pass": {
+      "x": 560,
+      "y": 300
+    },
+    "hook:audit": {
+      "x": 600,
+      "y": 508
+    },
+    "mcp:repository": {
+      "x": 1120,
+      "y": 24
+    },
+    "mcp:review-board": {
+      "x": 1120,
+      "y": 148
+    },
+    "host:pager": {
+      "x": 1120,
+      "y": 300
+    }
+  },
+  "zoom": 0.7019817073170732,
+  "pan": {
+    "x": -7.67133535989899,
+    "y": 106.75247564548397
+  },
+  "look": "clear",
+  "links": [
+    {
+      "from": "channel:telegram",
+      "to": "scope"
+    },
+    {
+      "from": "schedule:weekday",
+      "to": "scope"
+    },
+    {
+      "from": "channel:github",
+      "to": "scope"
+    },
+    {
+      "from": "channel:request",
+      "to": "scope"
+    },
+    {
+      "from": "scope",
+      "to": "agent"
+    },
+    {
+      "from": "agent",
+      "to": "tool:read-diff"
+    },
+    {
+      "from": "tool:read-diff",
+      "to": "mcp:repository"
+    },
+    {
+      "from": "mcp:repository",
+      "to": "skill:product-change"
+    },
+    {
+      "from": "mcp:repository",
+      "to": "skill:dependency-bump"
+    },
+    {
+      "from": "skill:product-change",
+      "to": "subagent:security-pass"
+    },
+    {
+      "from": "subagent:security-pass",
+      "to": "tool:comment"
+    },
+    {
+      "from": "skill:dependency-bump",
+      "to": "tool:comment"
+    },
+    {
+      "from": "tool:comment",
+      "to": "tool:approve"
+    },
+    {
+      "from": "tool:comment",
+      "to": "mcp:review-board"
+    },
+    {
+      "from": "tool:approve",
+      "to": "mcp:review-board"
+    },
+    {
+      "from": "agent",
+      "to": "hook:audit"
+    },
+    {
+      "from": "hook:audit",
+      "to": "host:pager"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "positions": {
+    "channel:telegram": {
+      "x": 36,
+      "y": 80
+    },
+    "scope": {
+      "x": 343,
+      "y": 69
+    },
+    "agent": {
+      "x": 640,
+      "y": 70
+    },
+    "skill:hand-off": {
+      "x": 960,
+      "y": 220
+    }
+  },
+  "zoom": 0.7230902777777778,
+  "pan": {
+    "x": -4.4312744140625,
+    "y": 139.58366224500867
+  },
+  "look": "clear",
+  "links": [
+    {
+      "from": "channel:telegram",
+      "to": "scope"
+    },
+    {
+      "from": "scope",
+      "to": "agent"
+    },
+    {
+      "from": "agent",
+      "to": "skill:hand-off"
+    }
+  ]
+}

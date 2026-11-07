@@ -1,0 +1,8 @@
+{
+  "url": "",
+  "description": "The signed-in Cursor account connectors. Used to read the pull request.",
+  "secret": "",
+  "transport": "account",
+  "command": "",
+  "advertise": true
+}

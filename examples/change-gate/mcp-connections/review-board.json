@@ -1,0 +1,8 @@
+{
+  "url": "http://review-board:7000/mcp",
+  "description": "Posts the review comment and the approval request. Does not merge.",
+  "secret": "REVIEW_TOKEN",
+  "transport": "http",
+  "command": "",
+  "advertise": true
+}

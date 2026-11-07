@@ -1,0 +1,7 @@
+{
+  "type": "webhook",
+  "description": "A customer message. The signature is checked before the run starts.",
+  "verify": true,
+  "route": "/hooks/inbox",
+  "secret": "WEBHOOK_SECRET"
+}
