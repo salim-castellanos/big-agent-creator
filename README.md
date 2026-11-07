@@ -49,14 +49,14 @@ From `apps/extension`, after `npm test` is green:
 
 ```bash
 npx @vscode/vsce@2.32.0 login SalimCastellanos
-npx @vscode/vsce@2.32.0 publish --allow-missing-repository --skip-license
+npx @vscode/vsce@2.32.0 publish --skip-license
 ```
 
 Before the first publish:
 
 - The icon is `media/icon.png` (256 px). Do not replace it with a file that has text inside.
 - `README.md` in `apps/extension` is the store page. Keep it in English.
-- This repo does not name a git remote yet. Add `repository` in `package.json` when the public git exists, and drop `--allow-missing-repository`.
+- The public git is https://github.com/salim-castellanos/big-agent-creator. `repository` is already set, so publish does not need `--allow-missing-repository`.
 - No license file is chosen yet. Add one before a public publish if you want the listing to name it.
 
 What comes after 0.2.0 is in [ROADMAP.md](./ROADMAP.md): the same image on AWS, GCP, and Azure, then a versioned digest you deploy instead of an unnamed rebuild. Another model runner is not part of that line.

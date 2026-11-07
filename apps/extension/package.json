@@ -4,6 +4,11 @@
   "description": "Design an AI agent workflow on a canvas and save it as a folder. Triggers, tools, Telegram, and local Docker. Open the playground. Skip the agent and the path answers in code, with no model call.",
   "version": "0.2.0",
   "publisher": "SalimCastellanos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/salim-castellanos/big-agent-creator.git",
+    "directory": "apps/extension"
+  },
   "icon": "media/icon.png",
   "galleryBanner": { "color": "#1A2332", "theme": "dark" },
   "keywords": ["ai agent", "agent workflow", "canvas", "telegram bot", "docker", "cursor", "tools", "playground", "webhook"],
