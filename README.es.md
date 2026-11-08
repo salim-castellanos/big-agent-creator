@@ -12,7 +12,7 @@ La primera versión para la tienda es la **0.2.0**. La extensión está en `apps
 
 | Un flujo más grande | Playground | Telegram |
 | --- | --- | --- |
-| ![Change gate en el lienzo](docs/imgs/BigAgentCreator1.png) | ![Probar y el playground](docs/imgs/BigAgentCreator-InterfazPruebasPalyground.jpg) | ![Una respuesta de Telegram](docs/imgs/BigAgentCreator-Telegram.png) |
+| ![Change gate en el lienzo](docs/imgs/BigAgentCreator1.png) | ![Probar y el playground](docs/imgs/BigAgentCreator-InterfazPruebasPlayground.jpg) | ![Una respuesta de Telegram](docs/imgs/BigAgentCreator-Telegram.png) |
 
 ## Qué puedes hacer
 

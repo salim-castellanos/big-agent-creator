@@ -12,7 +12,7 @@ The first Marketplace release is **0.2.0**. The extension is `apps/extension`. T
 
 | A larger flow | Playground | Telegram |
 | --- | --- | --- |
-| ![Change gate on the canvas](docs/imgs/BigAgentCreator1.png) | ![Prove and the playground](docs/imgs/BigAgentCreator-InterfazPruebasPalyground.jpg) | ![A Telegram reply](docs/imgs/BigAgentCreator-Telegram.png) |
+| ![Change gate on the canvas](docs/imgs/BigAgentCreator1.png) | ![Prove and the playground](docs/imgs/BigAgentCreator-InterfazPruebasPlayground.jpg) | ![A Telegram reply](docs/imgs/BigAgentCreator-Telegram.png) |
 
 ## What you can do
 

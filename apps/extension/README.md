@@ -8,7 +8,7 @@ You stay in VS Code or Cursor. The drawing is not a picture of the agent. Each s
 
 | A larger flow | Playground | Telegram |
 | --- | --- | --- |
-| ![Change gate on the canvas](media/gallery/BigAgentCreator1.png) | ![Prove and the playground](media/gallery/BigAgentCreator-InterfazPruebasPalyground.jpg) | ![A Telegram reply](media/gallery/BigAgentCreator-Telegram.png) |
+| ![Change gate on the canvas](media/gallery/BigAgentCreator1.png) | ![Prove and the playground](media/gallery/BigAgentCreator-InterfazPruebasPlayground.jpg) | ![A Telegram reply](media/gallery/BigAgentCreator-Telegram.png) |
 
 ## What you can build
 
