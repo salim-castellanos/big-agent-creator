@@ -30,6 +30,8 @@ import {
   scanWorkspace,
   cardNeeds,
   composeIsRunning,
+  composePortClosed,
+  PORT_CLOSED,
   DOCKER_DOWN,
   DOCKER_MISSING,
   DOCKER_SILENT,
@@ -338,8 +340,9 @@ class Home implements vscode.WebviewViewProvider {
     }, false, 12000);
     if (gen !== this.shipGen) return;
     const clean = scrubLogs(logs, names);
-    const running = composeIsRunning(ps);
-    const failed = wasStart && !running;
+    const portClosed = composePortClosed(ps);
+    const running = composeIsRunning(ps) && !portClosed;
+    const failed = portClosed || (wasStart && !running);
     const stats = running ? await this.localStats(root) : { cpu: "—", memory: "—", healthMs: null };
     if (gen !== this.shipGen) return;
     this.ship = {
@@ -347,7 +350,8 @@ class Home implements vscode.WebviewViewProvider {
       running,
       failed,
       phase: "idle",
-      summary: running ? "Listening on http://127.0.0.1:3000." : failed ? "The container is not running. Read the log." : "Stopped. Start builds the image and runs it here.",
+      summary: running ? "Listening on http://127.0.0.1:3000." : portClosed ? PORT_CLOSED : failed ? "The container is not running. Read the log." : "Stopped. Start builds the image and runs it here.",
+      republish: portClosed,
       logs: clean.slice(-8000),
       publicUrl: this.ship.publicUrl,
       stats,
@@ -1022,7 +1026,7 @@ class Home implements vscode.WebviewViewProvider {
         }
         else if (message.task === "follow") this.followLogs(root);
         else if (message.task === "playground") await vscode.env.openExternal(vscode.Uri.parse("http://127.0.0.1:3000/playground"));
-        else if (message.task === "start") await this.compose(root, ["compose", "up", "--build", "-d"], "building");
+        else if (message.task === "start") await this.compose(root, this.ship.republish ? ["compose", "up", "--build", "-d", "--force-recreate"] : ["compose", "up", "--build", "-d"], "building");
         else if (message.task === "rebuild") await this.compose(root, ["compose", "up", "--build", "-d", "--force-recreate"], "rebuilding");
         else if (message.task === "stop") await this.compose(root, ["compose", "down"], "stopping");
         else if (message.task === "tunnel") await this.openTunnel();

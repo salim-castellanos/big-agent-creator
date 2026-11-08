@@ -1,6 +1,6 @@
 # Línea base — BigAgentCreator
 
-Lo que la carpeta hace en la fuente **0.2.25**. No es una HU ni una spec. El cambio nuevo abre las suyas antes de `apps/`.
+Lo que la carpeta hace en la fuente **0.2.26**. No es una HU ni una spec. El cambio nuevo abre las suyas antes de `apps/`.
 
 El git publicado es `https://github.com/salim-castellanos/big-agent-creator`. `origin/main` es el corte de la tienda. El trabajo posterior está en el árbol de trabajo y no en ese commit. `STATUS.md` conserva el relato de versiones. Si discrepa con este archivo, manda este.
 

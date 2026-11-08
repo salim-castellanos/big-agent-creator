@@ -13,6 +13,7 @@ export type ShipStatus = {
   publicUrl: string;
   stats?: ShipStats;
   dockerWhy?: "missing" | "down";
+  republish?: boolean;
 };
 
 export type Ui = {

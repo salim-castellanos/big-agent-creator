@@ -425,6 +425,7 @@ export function dockerProblem(text: string): "missing" | "down" | "" {
 export const DOCKER_MISSING = "Docker is not installed, or this machine cannot run it. Install Docker, leave it running, then come back to Ship.";
 export const DOCKER_DOWN = "Docker Desktop is not running. Open it, wait until it is ready, then Start.";
 export const DOCKER_SILENT = "Docker did not answer. Open it, wait until it is ready, then Refresh.";
+export const PORT_CLOSED = "The container is running, but this machine is not listening on port 3000. Start publishes it again.";
 
 export function lmGate(input: { hasApi: boolean; modelCount: number; replied: boolean }): { ok: boolean; reason: string } {
   if (!input.hasApi) return { ok: false, reason: "This editor has no language model for extensions. The chat stays off." };
@@ -1842,6 +1843,13 @@ export function scrubLogs(text: string, names: string[]): string {
     out = out.replace(new RegExp(`${name}=\\S+`, "g"), `${name}=•••`);
   }
   return out.replace(/\d{6,}:[A-Za-z0-9_-]{20,}/g, "•••");
+}
+
+export function composePortClosed(text: string): boolean {
+  if (!composeIsRunning(text)) return false;
+  if (/127\.0\.0\.1:3000->3000|0\.0\.0\.0:3000->3000|\[::\]:3000->3000/.test(text)) return false;
+  if (/"PublishedPort"\s*:\s*3000/.test(text)) return false;
+  return /"PublishedPort"\s*:\s*0/.test(text) || /"Ports"\s*:\s*"3000\/tcp"/.test(text);
 }
 
 export function composeIsRunning(text: string): boolean {

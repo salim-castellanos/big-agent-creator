@@ -2,7 +2,7 @@
   "name": "bigagentcreator",
   "displayName": "BigAgentCreator",
   "description": "Design an AI agent workflow on a canvas and save it as a folder. Triggers, tools, and Telegram. Manage environments and deploy the same image with Docker locally, or straight to AWS, GCP, and Azure. Skip the agent and the path answers in code.",
-  "version": "0.2.25",
+  "version": "0.2.26",
   "publisher": "BigAgentCreator",
   "repository": {
     "type": "git",

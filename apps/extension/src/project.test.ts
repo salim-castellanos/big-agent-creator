@@ -11,7 +11,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { designerHtml, type Ui } from "./designer";
 import { copy, phrase } from "./copy";
-import { arrange, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, DOCKER_MISSING, dockerProblem, flowReport, lmGate, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
+import { arrange, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, composePortClosed, DOCKER_MISSING, dockerProblem, flowReport, lmGate, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
 
 test("an agent folder keeps secrets out of the image", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
@@ -1004,6 +1004,8 @@ test("local ship reads running, failed, and log lines", () => {
   const ndjson = '{"Service":"agent","State":"running"}\n';
   const array = '[{"Service":"agent","Status":"Up 3 seconds"}]';
   const exited = '{"State":"exited","Status":"Exited (1)"}';
+  assert.equal(composePortClosed('{"State":"running","Ports":"3000/tcp","Publishers":[{"PublishedPort":0,"TargetPort":3000}]}'), true);
+  assert.equal(composePortClosed('{"State":"running","Ports":"127.0.0.1:3000->3000/tcp","Publishers":[{"PublishedPort":3000,"TargetPort":3000}]}'), false);
   assert.equal(composeIsRunning(ndjson), true);
   assert.equal(composeIsRunning(array), true);
   assert.equal(composeIsRunning(exited), false);

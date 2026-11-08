@@ -718,6 +718,7 @@ const sentences: Record<string, string> = {
   "Checking this machine.": "Revisando esta máquina.",
   "Docker Desktop is not running. Open it, wait until it is ready, then Start.": "Docker Desktop no está en marcha. Ábrelo, espera a que esté listo y pulsa Iniciar.",
   "Docker did not answer. Open it, wait until it is ready, then Refresh.": "Docker no contestó. Ábrelo, espera a que esté listo y pulsa Actualizar.",
+  "The container is running, but this machine is not listening on port 3000. Start publishes it again.": "El contenedor está en marcha, pero esta máquina no escucha el puerto 3000. Iniciar lo publica otra vez.",
   "Checking Docker on this machine.": "Revisando Docker en esta máquina.",
   "Docker answered. Checking the container.": "Docker contestó. Revisando el contenedor.",
   "Reading the container log.": "Leyendo el log del contenedor.",
