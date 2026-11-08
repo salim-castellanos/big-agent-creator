@@ -11,7 +11,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { designerHtml, type Ui } from "./designer";
 import { copy, phrase } from "./copy";
-import { arrange, captureFolder, CHANNEL_NEEDS, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
+import { arrange, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, DOCKER_MISSING, dockerProblem, flowReport, lmGate, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
 
 test("an agent folder keeps secrets out of the image", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
@@ -826,20 +826,191 @@ test("a person can go from an empty folder through the canvas to ship", () => {
   const page = { mode: "deploy" as const, selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
   const layout = readLayout(root);
   const unknown = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "unknown", running: false, phase: "idle", summary: "", logs: "", publicUrl: "" });
-  assert.match(unknown, /id="ship-start"[^>]*disabled/);
+  assert.equal(/id="ship-start"[^>]*disabled/.test(unknown), false);
   const stopped = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: false, phase: "idle", summary: "", logs: "", publicUrl: "" });
   assert.equal(/id="ship-start"[^>]*disabled/.test(stopped), false);
   assert.match(stopped, /id="open-playground"[^>]*disabled/);
   assert.match(stopped, /id="ship-stop"[^>]*disabled/);
   assert.match(stopped, /AWS/);
+  assert.match(stopped, /Optional on this machine/);
+  assert.equal(stopped.includes("AGENT_SDK_BEARER_TOKEN is empty"), false);
+  assert.match(stopped, /<details class="ship-more">/);
+  assert.match(stopped, /id="rewrite-docker"/);
   assert.equal(stopped.includes('id="ship-aws"'), false);
-  const running = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: true, phase: "idle", summary: "", logs: "", publicUrl: "" });
+  const running = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: true, phase: "idle", summary: "Listening on http://127.0.0.1:3000.", logs: "2026-11-07T20:00:00.000Z info ready", publicUrl: "", stats: { cpu: "1.2%", memory: "40MiB / 1GiB", healthMs: 12 } });
+  assert.match(running, /id="ship-start"[^>]*disabled[^>]*>Running</);
+  assert.equal(/id="ship-refresh"[^>]*disabled/.test(running), false);
+  assert.match(running, /Read this machine again/);
   assert.equal(/id="open-playground"[^>]*disabled/.test(running), false);
   assert.equal(/id="ship-stop"[^>]*disabled/.test(running), false);
+  assert.match(running, /data-state="running"/);
+  assert.match(running, /data-agent>Desk</);
+  assert.match(running, /1\.2%/);
+  assert.match(running, /12 ms/);
+  assert.match(running, /id="log-search"/);
+  assert.match(running, /id="log-from"/);
+  assert.match(running, /max-height: none/);
+  const failed = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: false, failed: true, phase: "idle", summary: "The build stopped. Read the log.", logs: "", publicUrl: "" });
+  assert.match(failed, /data-state="failed"/);
+  assert.match(failed, /class="ship-error"/);
+  assert.match(failed, />Failed</);
+  assert.equal(/id="ship-start"[^>]*disabled/.test(failed), false);
+  assert.match(failed, /id="open-playground"[^>]*disabled/);
+  const spanish = designerHtml(loadProject(root), { ...page, lang: "es" }, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: false, failed: true, phase: "idle", summary: "The build stopped. Read the log.", logs: "", publicUrl: "" });
+  assert.match(spanish, />Falló</);
+  assert.match(spanish, /Buscar en logs/);
+  assert.match(spanish, /La construcción se detuvo/);
 
   const examples = designerHtml(loadProject(root), { ...page, mode: "examples" }, true, undefined, "", layout, layout);
   for (const example of EXAMPLES) assert.match(examples, new RegExp(`data-example="${example.id}"`), example.id);
   const prove = designerHtml(loadProject(root), { ...page, mode: "prove" }, true, undefined, "", layout, layout, false, readStudio(root));
   assert.match(prove, /id="eval-form"/);
   assert.match(prove, /in-scope/);
+});
+
+test("a blank folder offers each example, and the canvas names what a flow still needs", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  const page = { mode: "flow" as const, selected: "agent", notice: "", libraryOpen: true, inspectorOpen: true, libraryWidth: 240, inspectorWidth: 280 };
+  const blank = designerHtml(null, page, true, scanWorkspace(root), "agent");
+  assert.match(blank, /id="create-form"/);
+  for (const example of EXAMPLES) assert.match(blank, new RegExp(`data-init-example="${example.id}"`), example.id);
+  const spanishBlank = designerHtml(null, { ...page, lang: "es" }, true, scanWorkspace(root), "agent");
+  assert.match(blank, /Agentic flow examples/);
+  assert.match(blank, /class="pick primary" data-init-example="hello"/);
+  assert.ok(blank.indexOf("data-init-example") < blank.indexOf("Initialize blank"));
+  assert.match(spanishBlank, /Ejemplos de flujos agénticos/);
+  assert.match(spanishBlank, /class="pick primary" data-init-example="hello"/);
+  assert.ok(spanishBlank.indexOf("data-init-example") < spanishBlank.indexOf("Inicializar en blanco"));
+
+  const project = initWorkspace(root, "Desk");
+  assert.equal(cardNeeds(project).some((row) => row.id === "agent" && row.missing.some((line) => line.includes("CURSOR_API_KEY"))), true);
+  assert.equal(cardNeeds(project).some((row) => row.id === "scope"), true);
+  assert.equal(simulateFlow(project).ready, false);
+  const layout = readLayout(root);
+  const canvas = designerHtml(project, page, true, undefined, "", layout, layout);
+  assert.match(canvas, /class="node agent on gap"/);
+  assert.match(canvas, /title="[^"]*CURSOR_API_KEY is empty/);
+  assert.match(canvas, /id="simulate-flow"/);
+  assert.match(canvas, /id="flow-sim"[\s\S]*CURSOR_API_KEY is empty/);
+  assert.match(canvas, /data-set-secret="CURSOR_API_KEY"/);
+  assert.match(canvas, /Set CURSOR_API_KEY in Secrets/);
+  const warn = canvas.slice(canvas.indexOf('class="warn"'));
+  assert.ok(warn.indexOf('class="attention"') < warn.indexOf("Local run is fine without this"));
+  assert.match(canvas, /Local run is fine without this/);
+  assert.match(canvas, /later cloud deploy/);
+  const secretsPage = designerHtml(project, { ...page, mode: "secrets", secretFocus: "CURSOR_API_KEY" }, true, undefined, "", layout, layout);
+  assert.match(secretsPage, /id="secret-name" value="CURSOR_API_KEY"/);
+  assert.match(secretsPage, /Type the value for CURSOR_API_KEY/);
+  assert.match(canvas, /id="lm-test"/);
+  assert.match(canvas, /id="ask-text"[^>]*disabled/);
+  const spanish = designerHtml(project, { ...page, lang: "es" }, true, undefined, "", layout, layout);
+  assert.match(spanish, /Simular flujo/);
+  assert.match(spanish, /CURSOR_API_KEY está vacío/);
+  assert.match(spanish, /Probar comunicación/);
+
+  saveScope(root, "Refuse refunds.");
+  setSecret(root, "CURSOR_API_KEY", "not-a-real-key");
+  const readyProject = loadProject(root);
+  assert.equal(simulateFlow(readyProject).ready, true);
+  const ready = designerHtml(readyProject, page, true, undefined, "", layout, layout);
+  assert.match(ready, /This flow has the minimum configuration/);
+  assert.equal(/class="node agent on gap"/.test(ready), false);
+
+  saveItem(root, { kind: "tool", name: "lookup", description: "Find", body: "", calls: "", effect: "read" });
+  const withTool = loadProject(root);
+  const toolPage = { ...page, selected: "tool:lookup" };
+  const tool = designerHtml(withTool, toolPage, true, undefined, "", readLayout(root), layout);
+  assert.match(tool, /class="node tool on gap"/);
+  assert.match(tool, /title="[^"]*does not say what it calls/);
+  assert.match(tool, /id="calls" data-need="1"/);
+  assert.match(tool, /<label class="need">/);
+
+  saveItem(root, { kind: "channel", name: "gate", description: "github", body: "", route: "pull_request", repo: "" });
+  const channel = loadProject(root);
+  assert.equal(cardNeeds(channel).some((row) => row.id === "channel:gate" && row.fields.includes("repo-github")), true);
+  assert.equal(cardNeeds(channel).some((row) => row.missing.some((line) => line.includes("GITHUB_WEBHOOK_SECRET is empty"))), true);
+
+  assert.equal(dockerProblem("'docker' is not recognized as an internal or external command"), "missing");
+  assert.equal(dockerProblem("spawn docker ENOENT"), "missing");
+  assert.equal(dockerProblem("error during connect: cannot find the file specified"), "down");
+  assert.equal(dockerProblem("Docker did not answer in time."), "down");
+  const checking = designerHtml(readyProject, { ...page, mode: "deploy" }, true, undefined, "", layout, layout, false, undefined, { docker: "unknown", running: false, phase: "checking", summary: "Checking Docker on this machine.", logs: "Checking Docker on this machine.\n", publicUrl: "" });
+  assert.match(checking, /class="working"/);
+  assert.match(checking, /class="bar"/);
+  assert.match(checking, /class="spin"/);
+  assert.equal(/id="ship-start"[^>]*disabled/.test(checking), false);
+  assert.equal(/id="ship-refresh"[^>]*disabled/.test(checking), false);
+  const building = designerHtml(readyProject, { ...page, mode: "deploy" }, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: false, phase: "building", summary: "Building the local image. The log shows each step.", logs: "Building the local image. The log shows each step.\n", publicUrl: "" });
+  assert.match(building, /class="working"/);
+  assert.match(building, /id="ship-start"[^>]*disabled/);
+  assert.match(checking, /button:disabled/);
+  assert.match(checking, /Checking Docker on this machine/);
+  const ship = designerHtml(readyProject, { ...page, mode: "deploy" }, true, undefined, "", layout, layout, false, undefined, { docker: "down", dockerWhy: "missing", running: false, phase: "idle", summary: DOCKER_MISSING, logs: "", publicUrl: "" });
+  assert.match(ship, /class="ship-error"/);
+  assert.match(ship, /Docker missing/);
+  assert.match(ship, /Install Docker, leave it running/);
+  const shipEs = designerHtml(readyProject, { ...page, mode: "deploy", lang: "es" }, true, undefined, "", layout, layout, false, undefined, { docker: "down", dockerWhy: "missing", running: false, phase: "idle", summary: DOCKER_MISSING, logs: "", publicUrl: "" });
+  assert.match(shipEs, /Falta Docker/);
+  assert.match(shipEs, /Instala Docker/);
+
+  assert.equal(lmGate({ hasApi: false, modelCount: 0, replied: false }).ok, false);
+  assert.equal(lmGate({ hasApi: true, modelCount: 0, replied: false }).ok, false);
+  assert.equal(lmGate({ hasApi: true, modelCount: 1, replied: false }).ok, false);
+  const open = lmGate({ hasApi: true, modelCount: 1, replied: true });
+  assert.equal(open.ok, true);
+  const ask = designerHtml(readyProject, { ...page, askOpen: true, lm: open }, true, undefined, "", layout, layout);
+  assert.equal(/id="ask-text"[^>]*disabled/.test(ask), false);
+  assert.match(ask, /The editor model answered/);
+});
+
+test("each example is servable and only owes secrets the person must set", () => {
+  const examplesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "examples");
+  const expected: Record<string, string[]> = {
+    hello: ["CURSOR_API_KEY"],
+    "telegram-desk": ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"],
+    "support-desk": ["CASES_TOKEN", "CURSOR_API_KEY", "WEBHOOK_SECRET"],
+    "change-gate": ["CURSOR_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET", "PAGER_TOKEN", "REVIEW_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WEBHOOK_SECRET"],
+  };
+  for (const example of EXAMPLES) {
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+    loadExample(path.join(examplesRoot, example.id), dest);
+    const project = loadProject(dest);
+    const report = flowReport(project);
+    assert.deepEqual(report.folder, [], example.id);
+    assert.deepEqual([...report.secrets].sort(), expected[example.id], example.id);
+    if (example.id === "change-gate") {
+      assert.deepEqual(report.cards.map((row) => row.id), ["channel:github"]);
+      assert.match(report.cards[0].missing.join(" "), /repository/);
+    } else assert.deepEqual(report.cards, [], example.id);
+    for (const name of report.secrets) setSecret(dest, name, "set");
+    const open = loadProject(dest);
+    for (const card of flowReport(open).cards) {
+      const item = open.items.find((entry) => `${entry.kind}:${entry.name}` === card.id);
+      if (item) saveItem(dest, { ...item, repo: "acme/app" });
+    }
+    const done = flowReport(loadProject(dest));
+    assert.equal(done.ready, true, `${example.id}: ${done.secrets.concat(done.cards.flatMap((row) => row.missing), done.folder).join(" | ")}`);
+    const page = { mode: "flow" as const, selected: "agent", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+    const layout = readLayout(dest);
+    const html = designerHtml(project, page, true, undefined, "", layout, layout);
+    assert.match(html, /id="flow-sim"[^>]*hidden/);
+    assert.match(html, /Flow check/);
+    assert.match(html, /This flow cannot run yet/);
+    assert.match(html, /Set these in Secrets/);
+  }
+});
+
+test("local ship reads running, failed, and log lines", () => {
+  const ndjson = '{"Service":"agent","State":"running"}\n';
+  const array = '[{"Service":"agent","Status":"Up 3 seconds"}]';
+  const exited = '{"State":"exited","Status":"Exited (1)"}';
+  assert.equal(composeIsRunning(ndjson), true);
+  assert.equal(composeIsRunning(array), true);
+  assert.equal(composeIsRunning(exited), false);
+  assert.equal(composeIsRunning("Stopped"), false);
+  assert.equal(logLevel("2026-11-07T20:00:00.000Z error boom"), "error");
+  assert.equal(logLevel("warning: retry"), "warn");
+  assert.equal(logLevel("ready"), "info");
+  assert.equal(logStamp("agent-1  | 2026-11-07T20:00:00.000Z ready"), Date.parse("2026-11-07T20:00:00.000Z"));
+  assert.equal(logStamp("no time here"), null);
 });

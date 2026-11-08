@@ -1,13 +1,18 @@
 import { exampleText, phrase, studioText, t, type CopyKey, type Lang } from "./copy";
-import { CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, GUIDE_URL, GUIDE_URL_ES, hookSecretReach, LIBRARY_KINDS, review, slackReach, telegramReach, TRIGGER_TYPES, whatsappReach, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
+import { cardNeeds, CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, flowReport, GUIDE_URL, GUIDE_URL_ES, hookSecretReach, LIBRARY_KINDS, review, slackReach, telegramReach, TRIGGER_TYPES, whatsappReach, type CardNeed, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
+
+export type ShipStats = { cpu: string; memory: string; healthMs: number | null };
 
 export type ShipStatus = {
   docker: "unknown" | "down" | "ready";
   running: boolean;
+  failed?: boolean;
   phase: "idle" | "building" | "stopping" | "checking" | "rebuilding" | "tunnel" | "webhook";
   summary: string;
   logs: string;
   publicUrl: string;
+  stats?: ShipStats;
+  dockerWhy?: "missing" | "down";
 };
 
 export type Ui = {
@@ -20,6 +25,10 @@ export type Ui = {
   inspectorWidth: number;
   lang?: Lang;
   helpOpen?: boolean;
+  secretFocus?: string;
+  askOpen?: boolean;
+  lm?: { ok: boolean; reason: string };
+  ask?: { role: "you" | "guide"; text: string }[];
 };
 
 function langOf(ui: { lang?: Lang }): Lang {
@@ -63,6 +72,7 @@ function shell(body: string, script: string, lang: Lang = "en"): string {
   body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
   button, input, textarea, select { font: inherit; color: inherit; }
   button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
   button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   button.quiet { background: transparent; padding: 4px 8px; }
   button.on { outline: 1px solid var(--vscode-focusBorder); }
@@ -106,11 +116,11 @@ function stepBadge(steps: Record<string, number>, counts: Map<number, number>, i
   return `<span class="stepno${parallel ? " parallel" : ""}" title="${esc(title)}">${step}</span>`;
 }
 
-function nodeButton(item: Item, selected: string, at?: { x: number; y: number }, home?: { x: number; y: number }, gap = false, badge = "", lang: Lang = "en"): string {
+function nodeButton(item: Item, selected: string, at?: { x: number; y: number }, home?: { x: number; y: number }, gap = false, badge = "", lang: Lang = "en", hint = ""): string {
   const id = `${item.kind}:${item.name}`;
   const blurb = (item.kind === "channel" ? item.route || t(lang, "no_endpoint") : item.kind === "tool" ? item.calls || t(lang, "no_calls") : item.kind === "skill" || item.kind === "mcp" ? "" : item.description || item.body).replace(/\s+/g, " ").trim().slice(0, 72);
   const place = at ? ` style="left:${at.x}px;top:${at.y}px" data-home-x="${home?.x ?? at.x}" data-home-y="${home?.y ?? at.y}"` : "";
-  return `<button type="button" class="node ${item.kind}${id === selected ? " on" : ""}" data-id="${esc(id)}"${place}>
+  return `<button type="button" class="node ${item.kind}${id === selected ? " on" : ""}${gap ? " gap" : ""}" data-id="${esc(id)}" title="${esc(hint)}"${place}>
     ${badge}<span class="mark">${icon(item.kind)}</span>
     <span class="copy"><span class="k">${kindLabel(lang, item.kind)}</span><strong>${esc(item.name)}</strong>${pill(item, lang)}${gap ? `<span class="pill gap">${t(lang, "incomplete")}</span>` : ""}${blurb ? `<em>${esc(blurb)}</em>` : ""}</span>
   </button>`;
@@ -125,6 +135,39 @@ function secretList(lang: Lang, type: string): string {
   const need = CHANNEL_NEEDS[type];
   if (!need) return "";
   return `<ul class="secrets">${need.secrets.map((name) => `<li><strong>${name}</strong><span>${t(lang, "secret_after_save")}</span></li>`).join("")}</ul>`;
+}
+
+function paintNeeds(html: string, fields: string[]): string {
+  if (!fields.length) return html;
+  let out = html;
+  for (const field of fields) {
+    if (field.startsWith("secret:")) {
+      const name = field.slice("secret:".length);
+      out = out.replace(`<li><strong>${name}</strong>`, `<li class="need"><strong>${name}</strong>`);
+    } else out = out.replace(`id="${field}"`, `id="${field}" data-need="1"`);
+  }
+  return out.replace(/<label([^>]*)>([\s\S]*?)<\/label>/g, (full, attrs: string, inner: string) => {
+    if (!inner.includes('data-need="1"')) return full;
+    if (/class="/.test(attrs)) return `<label${attrs.replace('class="', 'class="need ')}>${inner}</label>`;
+    return `<label class="need"${attrs}>${inner}</label>`;
+  });
+}
+
+function secretNamesIn(row: CardNeed): string[] {
+  const names = row.fields.filter((field) => field.startsWith("secret:")).map((field) => field.slice("secret:".length));
+  for (const line of row.missing) {
+    const match = line.match(/^([A-Z][A-Z0-9_]*) is empty\. Set it in Secrets\.$/);
+    if (match) names.push(match[1]);
+  }
+  return [...new Set(names)];
+}
+
+function needBanner(needs: CardNeed[], selected: string, lang: Lang): string {
+  const row = needs.find((item) => item.id === selected);
+  if (!row) return "";
+  const names = secretNamesIn(row);
+  const jumps = names.map((name) => `<button type="button" class="primary" data-set-secret="${esc(name)}">${esc(t(lang, "set_secret", { name }))}</button>`).join("");
+  return `<ul class="needlist">${row.missing.map((line) => `<li>${esc(phrase(lang, line))}</li>`).join("")}</ul>${jumps ? `<div class="row">${jumps}</div>` : ""}`;
 }
 
 function inspector(project: Project, selected: string, lang: Lang): string {
@@ -352,7 +395,17 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   const tools = project?.items.filter((item) => item.kind === "tool") ?? [];
   const skills = project?.items.filter((item) => item.kind === "skill") ?? [];
   const mcps = project?.items.filter((item) => item.kind === "mcp") ?? [];
-  const gaps = new Set(project ? review(project).map((finding) => finding.id) : []);
+  const needs = project ? cardNeeds(project) : [];
+  const gaps = new Set(needs.map((row) => row.id));
+  const hintFor = (id: string, purposeKey: CopyKey) => {
+    const missing = needs.filter((row) => row.id === id).flatMap((row) => row.missing);
+    const purposeText = t(lang, purposeKey);
+    return missing.length ? `${purposeText} ${missing.map((line) => phrase(lang, line)).join(" ")}` : purposeText;
+  };
+  const report = project ? flowReport(project) : { ready: true, secrets: [] as string[], cards: [] as { id: string; missing: string[] }[], folder: [] as string[] };
+  const bearerOpen = Boolean(project?.secrets.some((secret) => secret.name === "AGENT_SDK_BEARER_TOKEN" && !secret.configured));
+  const bearerWarn = bearerOpen ? `<div class="warn"><button type="button" class="attention" data-set-secret="AGENT_SDK_BEARER_TOKEN">${esc(t(lang, "set_secret", { name: "AGENT_SDK_BEARER_TOKEN" }))}</button><h3>${t(lang, "bearer_warn_h")}</h3><p>${t(lang, "bearer_why")}</p></div>` : "";
+  const flowDialog = `<div id="flow-sim" class="result" role="dialog" aria-labelledby="flow-sim-title" hidden><header><strong id="flow-sim-title">${t(lang, "flow_check")}</strong><button type="button" id="flow-sim-close">${t(lang, "close")}</button></header><p class="verdict">${report.ready ? t(lang, "flow_ready") : t(lang, "flow_not_ready")}</p>${report.secrets.length ? `<h3>${t(lang, "still_secrets")}</h3><ul>${report.secrets.map((name) => `<li>${esc(phrase(lang, `${name} is empty. Set it in Secrets.`))} <button type="button" class="primary" data-set-secret="${esc(name)}">${esc(t(lang, "set_secret", { name }))}</button></li>`).join("")}</ul>` : ""}${report.cards.length ? `<h3>${t(lang, "still_cards")}</h3><ul>${report.cards.flatMap((row) => row.missing).map((line) => `<li>${esc(phrase(lang, line))}</li>`).join("")}</ul>` : ""}${report.folder.length ? `<h3>${t(lang, "still_folder")}</h3><ul>${report.folder.map((line) => `<li>${esc(phrase(lang, line))}</li>`).join("")}</ul>` : ""}${bearerWarn}</div>`;
   const nodeIds = project ? [...(project.limits ? ["scope"] : []), ...(project.think ? ["agent"] : []), ...project.items.map((item) => `${item.kind}:${item.name}`)] : [];
   const steps = project && layout ? executionSteps(nodeIds, flowLinks(project, layout)) : {};
   const stepCounts = new Map<number, number>();
@@ -374,19 +427,20 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
               <button type="button" id="redo" title="${esc(t(lang, "redo_title"))}">${t(lang, "redo")}</button>
               <button type="button" id="duplicate" title="${esc(ui.selected === "agent" ? t(lang, "duplicate_agent") : ui.selected === "scope" ? t(lang, "duplicate_limits") : t(lang, "duplicate_title"))}" ${ui.selected.includes(":") ? "" : "disabled"}>${t(lang, "duplicate")}</button>
               <button type="button" id="delete-node" title="${esc(ui.selected === "scope" || ui.selected === "agent" ? t(lang, "delete_card") : t(lang, "delete_title"))}" ${ui.selected.includes(":") || ui.selected === "scope" || ui.selected === "agent" ? "" : "disabled"}>${t(lang, "delete")}</button>
+              <button type="button" id="simulate-flow">${t(lang, "simulate")}</button>
             </div>
             <div class="surface" id="surface" style="width:${Math.max(1200, ...Object.values(layout?.positions || { a: { x: 0 } }).map((point) => point.x + 280))}px;height:${Math.max(720, ...Object.values(layout?.positions || { a: { y: 0 } }).map((point) => point.y + 200))}px;transform:translate(${layout?.pan.x || 24}px,${layout?.pan.y || 16}px) scale(${layout?.zoom || 1})">
               <svg id="wires"></svg>
-              ${channels.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `channel:${item.name}`).at, spot(layout!, home!, `channel:${item.name}`).origin, gaps.has(`channel:${item.name}`), badge(`channel:${item.name}`, lang))).join("")}
-              ${project.limits ? (() => { const place = spot(layout!, home!, "scope"); return `<button type="button" class="node scope ${ui.selected === "scope" ? "on" : ""}" data-id="scope" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("scope")}<span class="mark">${icon("limits")}</span><span class="copy"><span class="k">${kindLabel(lang, "limits")}</span><strong>${t(lang, "scope_name")}</strong><em>${esc((project.scope || t(lang, "scope_fallback")).replace(/\s+/g, " ").slice(0, 90))}</em></span></button>`; })() : ""}
-              ${project.think ? (() => { const place = spot(layout!, home!, "agent"); const model = project.model === "fast" ? t(lang, "fast_model") : project.model === "strong" ? t(lang, "strong_model") : t(lang, "auto_model"); return `<button type="button" class="node agent ${ui.selected === "agent" ? "on" : ""}" data-id="agent" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("agent")}<span class="mark">${icon("agent")}</span><span class="copy"><span class="k">${kindLabel(lang, "agent")}</span><strong>${esc(project.name)}</strong><em>${model}</em></span></button>`; })() : ""}
-              ${tools.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `tool:${item.name}`).at, spot(layout!, home!, `tool:${item.name}`).origin, gaps.has(`tool:${item.name}`), badge(`tool:${item.name}`, lang))).join("")}
-              ${skills.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `skill:${item.name}`).at, spot(layout!, home!, `skill:${item.name}`).origin, gaps.has(`skill:${item.name}`), badge(`skill:${item.name}`, lang))).join("")}
-              ${(project.items.filter((item) => item.kind === "schedule")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `schedule:${item.name}`).at, spot(layout!, home!, `schedule:${item.name}`).origin, gaps.has(`schedule:${item.name}`), badge(`schedule:${item.name}`, lang))).join("")}
-              ${(project.items.filter((item) => item.kind === "subagent")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `subagent:${item.name}`).at, spot(layout!, home!, `subagent:${item.name}`).origin, gaps.has(`subagent:${item.name}`), badge(`subagent:${item.name}`, lang))).join("")}
-              ${(project.items.filter((item) => item.kind === "hook")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `hook:${item.name}`).at, spot(layout!, home!, `hook:${item.name}`).origin, gaps.has(`hook:${item.name}`), badge(`hook:${item.name}`, lang))).join("")}
-              ${mcps.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `mcp:${item.name}`).at, spot(layout!, home!, `mcp:${item.name}`).origin, gaps.has(`mcp:${item.name}`), badge(`mcp:${item.name}`, lang))).join("")}
-              ${(project.items.filter((item) => item.kind === "host")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `host:${item.name}`).at, spot(layout!, home!, `host:${item.name}`).origin, gaps.has(`host:${item.name}`), badge(`host:${item.name}`, lang))).join("")}
+              ${channels.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `channel:${item.name}`).at, spot(layout!, home!, `channel:${item.name}`).origin, gaps.has(`channel:${item.name}`), badge(`channel:${item.name}`), lang, hintFor(`channel:${item.name}`, "purpose_channel"))).join("")}
+              ${project.limits ? (() => { const place = spot(layout!, home!, "scope"); return `<button type="button" class="node scope ${ui.selected === "scope" ? "on" : ""}${gaps.has("scope") ? " gap" : ""}" data-id="scope" title="${esc(hintFor("scope", "purpose_limits"))}" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("scope")}<span class="mark">${icon("limits")}</span><span class="copy"><span class="k">${kindLabel(lang, "limits")}</span><strong>${t(lang, "scope_name")}</strong><em>${esc((project.scope || t(lang, "scope_fallback")).replace(/\s+/g, " ").slice(0, 90))}</em></span></button>`; })() : ""}
+              ${project.think ? (() => { const place = spot(layout!, home!, "agent"); const model = project.model === "fast" ? t(lang, "fast_model") : project.model === "strong" ? t(lang, "strong_model") : t(lang, "auto_model"); return `<button type="button" class="node agent ${ui.selected === "agent" ? "on" : ""}${gaps.has("agent") ? " gap" : ""}" data-id="agent" title="${esc(hintFor("agent", "purpose_agent"))}" style="left:${place.at.x}px;top:${place.at.y}px" data-home-x="${place.origin.x}" data-home-y="${place.origin.y}">${badge("agent")}<span class="mark">${icon("agent")}</span><span class="copy"><span class="k">${kindLabel(lang, "agent")}</span><strong>${esc(project.name)}</strong><em>${model}</em></span></button>`; })() : ""}
+              ${tools.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `tool:${item.name}`).at, spot(layout!, home!, `tool:${item.name}`).origin, gaps.has(`tool:${item.name}`), badge(`tool:${item.name}`), lang, hintFor(`tool:${item.name}`, "purpose_tool"))).join("")}
+              ${skills.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `skill:${item.name}`).at, spot(layout!, home!, `skill:${item.name}`).origin, gaps.has(`skill:${item.name}`), badge(`skill:${item.name}`), lang, hintFor(`skill:${item.name}`, "purpose_skill"))).join("")}
+              ${(project.items.filter((item) => item.kind === "schedule")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `schedule:${item.name}`).at, spot(layout!, home!, `schedule:${item.name}`).origin, gaps.has(`schedule:${item.name}`), badge(`schedule:${item.name}`), lang, hintFor(`schedule:${item.name}`, "purpose_schedule"))).join("")}
+              ${(project.items.filter((item) => item.kind === "subagent")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `subagent:${item.name}`).at, spot(layout!, home!, `subagent:${item.name}`).origin, gaps.has(`subagent:${item.name}`), badge(`subagent:${item.name}`), lang, hintFor(`subagent:${item.name}`, "purpose_subagent"))).join("")}
+              ${(project.items.filter((item) => item.kind === "hook")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `hook:${item.name}`).at, spot(layout!, home!, `hook:${item.name}`).origin, gaps.has(`hook:${item.name}`), badge(`hook:${item.name}`), lang, hintFor(`hook:${item.name}`, "purpose_hook"))).join("")}
+              ${mcps.map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `mcp:${item.name}`).at, spot(layout!, home!, `mcp:${item.name}`).origin, gaps.has(`mcp:${item.name}`), badge(`mcp:${item.name}`), lang, hintFor(`mcp:${item.name}`, "purpose_mcp"))).join("")}
+              ${(project.items.filter((item) => item.kind === "host")).map((item) => nodeButton(item, ui.selected, spot(layout!, home!, `host:${item.name}`).at, spot(layout!, home!, `host:${item.name}`).origin, gaps.has(`host:${item.name}`), badge(`host:${item.name}`), lang, hintFor(`host:${item.name}`, "purpose_host"))).join("")}
             </div>
             <div class="dock">
               <button type="button" id="zoom-out" title="${esc(t(lang, "zoom_out"))}">−</button>
@@ -404,19 +458,23 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
             </div>
           </div>
         </div>
-        ${ui.inspectorOpen !== false ? `<aside class="rail right" style="width:${inspectorWidth}px"><div class="sash" data-sash="inspector"></div><header class="railhead"><button type="button" class="hide" data-chrome="inspector">${t(lang, "hide")}</button><h2>${t(lang, "properties")}</h2></header><div class="railbody">${inspector(project, ui.selected, lang)}</div></aside>` : `<button type="button" class="tab right" data-chrome="inspector">${t(lang, "show_properties")}</button>`}
-      </div>`
+        ${ui.inspectorOpen !== false ? `<aside class="rail right" style="width:${inspectorWidth}px"><div class="sash" data-sash="inspector"></div><header class="railhead"><button type="button" class="hide" data-chrome="inspector">${t(lang, "hide")}</button><h2>${t(lang, "properties")}</h2></header><div class="railbody">${needBanner(needs, ui.selected, lang)}${paintNeeds(inspector(project, ui.selected, lang), needs.find((row) => row.id === ui.selected)?.fields ?? [])}</div></aside>` : `<button type="button" class="tab right" data-chrome="inspector">${t(lang, "show_properties")}</button>`}
+      </div>${flowDialog}`
     : "";
   const secrets = project
     ? `<div class="sheet"><p class="kicker">${t(lang, "secrets_kicker")}</p><h2>${t(lang, "secrets")}</h2><p class="hint">${t(lang, "secrets_hint")}</p>
-        <ul class="secrets">${project.secrets.map((secret) => `<li><strong>${esc(secret.name)}</strong><span>${secret.configured ? t(lang, "set_locally") : t(lang, "empty")}</span></li>`).join("") || `<li class="hint">${t(lang, "no_names")}</li>`}</ul>
-        <label>${t(lang, "name")}<input id="secret-name" placeholder="CURSOR_API_KEY" /></label>
+        <ul class="secrets">${project.secrets.map((secret) => `<li class="${ui.secretFocus === secret.name && !secret.configured ? "need" : ""}"><strong>${esc(secret.name)}</strong><span>${secret.configured ? t(lang, "set_locally") : t(lang, "empty")}</span></li>`).join("") || `<li class="hint">${t(lang, "no_names")}</li>`}</ul>
+        ${ui.secretFocus ? `<p class="hint">${esc(t(lang, "set_this", { name: ui.secretFocus }))}</p>` : ""}
+        <label>${t(lang, "name")}<input id="secret-name" value="${esc(ui.secretFocus || "")}" placeholder="CURSOR_API_KEY" /></label>
         <label>${t(lang, "value")}<input id="secret-value" type="password" autocomplete="off" /></label>
         <div class="row"><button type="button" id="save-secret" class="primary">${t(lang, "save_secret")}</button></div></div>`
     : "";
   const local = ship ?? { docker: "unknown" as const, running: false, phase: "idle" as const, summary: "Checking this machine.", logs: "", publicUrl: "" };
   const busy = local.phase !== "idle";
-  const localLabel = local.phase === "building" ? t(lang, "building") : local.phase === "rebuilding" ? t(lang, "rebuilding") : local.phase === "stopping" ? t(lang, "stopping") : local.phase === "checking" ? t(lang, "checking") : local.phase === "tunnel" ? t(lang, "opening_tunnel") : local.phase === "webhook" ? t(lang, "registering") : local.docker === "down" ? t(lang, "docker_off") : local.running ? t(lang, "running") : t(lang, "stopped");
+  const acting = local.phase === "building" || local.phase === "rebuilding" || local.phase === "stopping";
+  const shipState = busy ? "busy" : local.docker === "down" ? "down" : local.failed ? "failed" : local.running ? "running" : "stopped";
+  const localLabel = local.phase === "building" ? t(lang, "building") : local.phase === "rebuilding" ? t(lang, "rebuilding") : local.phase === "stopping" ? t(lang, "stopping") : local.phase === "checking" ? t(lang, "checking") : local.phase === "tunnel" ? t(lang, "opening_tunnel") : local.phase === "webhook" ? t(lang, "registering") : local.docker === "down" && local.dockerWhy === "missing" ? t(lang, "docker_missing") : local.docker === "down" ? t(lang, "docker_off") : local.failed ? t(lang, "failed") : local.running ? t(lang, "running") : t(lang, "stopped");
+  const meters = local.stats ?? { cpu: "—", memory: "—", healthMs: null as number | null };
   const delivery = project ? deliveryCheck(project.root) : [];
   const telegram = project?.items.some((item) => item.kind === "channel" && item.description === "telegram") ?? false;
   const whatsapp = project?.items.some((item) => item.kind === "channel" && item.description === "whatsapp") ?? false;
@@ -428,26 +486,36 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         ...telegramProblems.map((finding) => phrase(lang, finding.message)),
         ...whatsappProblems.map((finding) => phrase(lang, finding.message)),
         ...review(project).map((finding) => phrase(lang, finding.message)),
-        ...project.secrets.filter((secret) => !secret.configured).map((secret) => phrase(lang, `${secret.name} is empty. Set it in Secrets.`)),
+        ...project.secrets.filter((secret) => !secret.configured && secret.name !== "AGENT_SDK_BEARER_TOKEN").map((secret) => phrase(lang, `${secret.name} is empty. Set it in Secrets.`)),
       ]
     : [];
   const deploy = project
-    ? `<div class="sheet fill"><p class="kicker">${t(lang, "one_image")}</p><h2>${t(lang, "ship")}</h2><p class="hint">${t(lang, "ship_hint")}</p>
-        <div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span class="statusline">${busy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(localLabel)}</span></span><strong>${t(lang, "local")}</strong></header><p>${esc(phrase(lang, local.summary))}</p><p class="path">${local.running ? t(lang, "playground_ready") : t(lang, "playground_after")} · http://127.0.0.1:3000/playground</p>
-          <div class="row"><button type="button" id="ship-start" class="primary" ${local.docker !== "ready" || busy || delivery.length ? "disabled" : ""}>${t(lang, "start")}</button><button type="button" id="open-playground" ${local.running && !busy ? "" : "disabled"}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${local.docker !== "ready" || busy || delivery.length ? "disabled" : ""}>${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${local.running || local.phase === "building" || local.phase === "rebuilding" ? "" : "disabled"}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${busy ? "disabled" : ""}>${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
-          <p class="hint">${t(lang, "rebuild_hint")}</p>
+    ? `<div class="sheet fill ship"><p class="kicker">${t(lang, "one_image")}</p><h2>${t(lang, "ship")}</h2><p class="hint">${t(lang, "ship_hint")}</p>
+        <div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span class="statusline" data-state="${shipState}">${busy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(localLabel)}</span></span><strong data-agent>${esc(project.name)}</strong><span class="where">${t(lang, "local")}</span></header>${busy ? `<div class="working" role="status"><span class="spin" aria-hidden="true"></span><span class="worktext">${esc(phrase(lang, local.summary))}</span><span class="bar" aria-hidden="true"></span></div>` : shipState === "failed" || shipState === "down" ? `<p class="ship-error" role="alert">${esc(phrase(lang, local.summary))}</p>` : `<p>${esc(phrase(lang, local.summary))}</p>`}<div class="meters"><span><em>${t(lang, "cpu")}</em>${esc(meters.cpu)}</span><span><em>${t(lang, "memory")}</em>${esc(meters.memory)}</span><span><em>${t(lang, "health")}</em>${meters.healthMs == null ? "—" : `${meters.healthMs} ms`}</span></div><p class="hint">${t(lang, "monitor_hint")}</p><p class="path">${local.running ? t(lang, "playground_ready") : t(lang, "playground_after")} · http://127.0.0.1:3000/playground</p>
+          <div class="row"><button type="button" id="ship-start" class="primary" ${acting || local.running || delivery.length ? "disabled" : ""} title="${esc(phrase(lang, local.summary))}">${acting || local.running ? esc(localLabel) : t(lang, "start")}</button><button type="button" id="open-playground" ${local.running && !acting ? "" : "disabled"}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${acting || delivery.length ? "disabled" : ""} title="${esc(t(lang, "rebuild_hint"))}">${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${local.running || acting ? "" : "disabled"}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${acting ? "disabled" : ""} title="${esc(t(lang, "refresh_does"))}">${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
           ${delivery.length ? `<p class="hint">${t(lang, "start_off")}</p>` : ""}
+          ${project.secrets.some((secret) => secret.name === "AGENT_SDK_BEARER_TOKEN" && !secret.configured) ? `<div class="bearer-note"><button type="button" class="attention" data-set-secret="AGENT_SDK_BEARER_TOKEN">${t(lang, "set_secret", { name: "AGENT_SDK_BEARER_TOKEN" })}</button><strong>AGENT_SDK_BEARER_TOKEN</strong><p>${t(lang, "bearer_why")}</p></div>` : ""}
         </div>
-        <div class="destinations">
-          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>${t(lang, "k8s")}</strong></header><p>${t(lang, "k8s_p")}</p></article>
-          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>AWS</strong></header><p>${t(lang, "aws_p")}</p></article>
-          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>GCP</strong></header><p>${t(lang, "gcp_p")}</p></article>
-          <article class="env"><header><span>${t(lang, "same_image")}</span><strong>Azure</strong></header><p>${t(lang, "azure_p")}</p></article>
+        <div class="logwrap">
+          <div class="logbar">
+            <input id="log-search" type="search" placeholder="${t(lang, "search_logs")}" aria-label="${t(lang, "search_logs")}" />
+            <select id="log-level" aria-label="${t(lang, "log_level")}"><option value="all">${t(lang, "all_logs")}</option><option value="error">${t(lang, "errors")}</option><option value="warn">${t(lang, "warnings")}</option><option value="info">${t(lang, "info")}</option></select>
+            <input id="log-from" type="datetime-local" aria-label="${t(lang, "log_from")}" />
+            <input id="log-to" type="datetime-local" aria-label="${t(lang, "log_to")}" />
+          </div>
+          <script type="application/json" id="log-seed">${JSON.stringify(local.logs.split(/\n/).map((line) => phrase(lang, line)).join("\n")).replace(/</g, "\\u003c")}</script>
+          <pre id="ship-log" class="log"></pre>
         </div>
-        ${problems.length ? `<ul class="work">${problems.map((problem) => `<li><p>${esc(problem)}</p></li>`).join("")}</ul>` : `<p class="hint">${t(lang, "no_problems")}</p>`}
-        <pre id="ship-log" class="log">${esc(local.logs || t(lang, "no_log"))}</pre>
-        <p class="hint">${t(lang, "ship_foot")}</p>
-        <div class="row"><button type="button" id="rewrite-docker">${t(lang, "rewrite_docker")}</button><button type="button" id="run-validate">${t(lang, "check_project")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div></div>`
+        <details class="ship-more"><summary>${t(lang, "ship_more")}${problems.length ? ` (${problems.length})` : ""}</summary>
+          <div class="destinations">
+            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>${t(lang, "k8s")}</strong></header><p>${t(lang, "k8s_p")}</p></article>
+            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>AWS</strong></header><p>${t(lang, "aws_p")}</p></article>
+            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>GCP</strong></header><p>${t(lang, "gcp_p")}</p></article>
+            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>Azure</strong></header><p>${t(lang, "azure_p")}</p></article>
+          </div>
+          ${problems.length ? `<ul class="work">${problems.map((problem) => `<li><p>${esc(problem)}</p></li>`).join("")}</ul>` : `<p class="hint">${t(lang, "no_problems")}</p>`}
+        </details>
+        <div class="ship-foot" title="${esc(t(lang, "ship_foot"))}"><button type="button" id="rewrite-docker">${t(lang, "rewrite_docker")}</button><button type="button" id="run-validate">${t(lang, "check_project")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div></div>`
     : "";
   const otherChannels = project ? project.items.filter((item) => item.kind === "channel" && !["telegram", "whatsapp", "slack", "github", "gitlab", "bitbucket"].includes(item.description || "")) : [];
   const slack = project?.items.some((item) => item.kind === "channel" && item.description === "slack") ?? false;
@@ -513,7 +581,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     : ui.mode === "examples"
       ? examplesPage
       : !project
-      ? `<form id="create-form" class="empty"><h2>${t(lang, "init_title")}</h2><p class="hint">${scan && scan.found.length ? t(lang, "init_keep") : t(lang, "init_empty")}</p><p class="path">${esc(lang === "es" ? GUIDE_URL_ES : GUIDE_URL)}</p>${checklist}<label>${t(lang, "name")}<input name="name" value="${esc(suggestedName)}" required /></label><div class="row"><button type="submit" class="primary">${t(lang, "init_button")}</button><button type="button" id="open-guide">${t(lang, "open_guide")}</button></div></form>`
+      ? `<form id="create-form" class="start"><h2>${t(lang, "init_title")}</h2><p class="lead-in">${scan && scan.found.length ? t(lang, "init_keep") : t(lang, "init_lead")}</p>${scan && scan.found.length ? checklist : ""}<section class="example-box"><h3>${t(lang, "init_examples_title")}</h3><div class="picks">${EXAMPLES.map((example) => { const label = exampleText(lang, example); return `<button type="button" class="pick primary" data-init-example="${esc(example.id)}"><strong>${esc(example.title)}</strong><span>${esc(label.summary)}</span></button>`; }).join("")}</div></section><section class="blank"><h3>${t(lang, "init_blank_h")}</h3><label>${t(lang, "name")}<input name="name" value="${esc(suggestedName)}" required /></label><div class="row"><button type="submit">${t(lang, "init_button")}</button><button type="button" id="open-guide">${t(lang, "open_guide")}</button></div></section></form>`
       : ui.mode === "prove"
         ? prove
         : ui.mode === "platform"
@@ -622,6 +690,29 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .node.agent .mark, .node.scope .mark { color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent); }
       .copy { min-width: 0; display: block; }
       .node.on { border-color: var(--vscode-focusBorder); }
+      .node.gap { border-color: #d66b6b; background: color-mix(in srgb, #d66b6b 12%, var(--vscode-editor-background)); }
+      label.need { color: #d66b6b; }
+      label.need input, label.need textarea, label.need select, li.need { border-color: #d66b6b; }
+      ul.needlist { color: #d66b6b; margin: 0 0 8px; padding-left: 1.1rem; }
+      .result { position: fixed; z-index: 28; top: 72px; left: 50%; transform: translateX(-50%); width: min(460px, calc(100% - 32px)); max-height: min(70vh, 520px); overflow: auto; box-sizing: border-box; padding: 16px 18px 20px; border-radius: 12px; background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.45)); box-shadow: 0 16px 48px rgba(0,0,0,.35); }
+      .result[hidden] { display: none; }
+      .result header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .result header strong { margin-right: auto; font-size: 16px; }
+      .result .verdict { margin: 0 0 12px; font-size: 14px; line-height: 1.45; }
+      .result h3 { margin: 14px 0 4px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
+      .result ul { margin: 0; padding-left: 1.2rem; }
+      .result li { margin: 6px 0; font-size: 13px; line-height: 1.45; }
+      .result .warn { margin-top: 14px; padding: 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, #c47a2a 55%, transparent); border-left: 3px solid #c47a2a; background: color-mix(in srgb, #c47a2a 10%, transparent); }
+      .result .warn p { margin: 8px 0 0; font-size: 13px; line-height: 1.45; }
+      .result .warn h3 { margin-top: 10px; }
+      .ask { position: fixed; right: 16px; bottom: 16px; z-index: 24; width: min(360px, calc(100% - 32px)); max-height: min(480px, calc(100% - 32px)); display: flex; flex-direction: column; box-sizing: border-box; padding: 12px; border-radius: 12px; background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.4)); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+      .ask[hidden] { display: none; }
+      .ask header { display: flex; align-items: center; gap: 8px; }
+      .ask header strong { margin-right: auto; }
+      .ask textarea { min-height: 72px; }
+      #ask-log { overflow: auto; margin-top: 8px; }
+      #ask-log p { margin: 6px 0; font-size: 13px; }
+      .askbtn { display: inline-flex; align-items: center; gap: 6px; }
       .node .k { display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; opacity: .6; }
       .node strong, .node em { display: block; }
       .node em { font-style: normal; opacity: .72; font-size: 12px; margin-top: 4px; }
@@ -639,7 +730,16 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .item.mcp { border-left-color: #8d84d6; }
       .form { margin-top: 8px; }
       .form[hidden] { display: none; }
-      .sheet, .empty { padding: 28px 32px; max-width: 40rem; box-sizing: border-box; }
+      .sheet, .empty, .start { padding: 28px 32px; max-width: 40rem; box-sizing: border-box; }
+      .start h2 { font-size: 22px; }
+      .lead-in { margin: 8px 0 0; font-size: 14px; line-height: 1.5; }
+      .example-box { margin: 20px 0 8px; padding: 16px; border: 1px solid var(--vscode-focusBorder); border-radius: 14px; background: color-mix(in srgb, var(--vscode-foreground) 5%, transparent); }
+      .example-box h3, .blank h3 { margin: 0 0 12px; font-size: 15px; font-weight: 650; letter-spacing: 0; text-transform: none; opacity: 1; }
+      .picks { display: grid; gap: 10px; }
+      .pick { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 14px 16px; border-radius: 10px; text-align: left; }
+      .pick strong { font-size: 15px; }
+      .pick span { margin-top: 4px; font-size: 13px; font-weight: 400; line-height: 1.4; opacity: .9; }
+      .blank { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); }
       .sheet.wide { max-width: 64rem; }
       .sheet.fill { max-width: none; flex: 1; min-width: 0; overflow: auto; }
       .kicker { margin: 0 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .55; }
@@ -649,14 +749,40 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .localbar header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
       .localbar header span { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; opacity: .55; }
       .statusline { display: inline-flex; align-items: center; gap: 8px; }
-      .spin { width: 14px; height: 14px; border-radius: 99px; border: 2px solid color-mix(in srgb, var(--vscode-foreground) 28%, transparent); border-top-color: var(--vscode-foreground); animation: spin 0.7s linear infinite; flex: none; }
+      .localbar .spin { display: inline-block; width: 16px; height: 16px; box-sizing: border-box; border-radius: 99px; border: 2px solid color-mix(in srgb, var(--vscode-foreground) 28%, transparent); border-top-color: var(--vscode-progressBar-background, #3794ff); opacity: 1; animation: spin 0.7s linear infinite; flex: none; }
+      .working { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-progressBar-background, #3794ff) 16%, transparent); font-size: 13px; }
+      .working .spin { width: 18px; height: 18px; }
+      .working .worktext { flex: none; }
+      .working .bar { position: relative; flex: 1; height: 4px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--vscode-foreground) 16%, transparent); }
+      .working .bar::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; background: var(--vscode-progressBar-background, #3794ff); animation: ship-load 1.1s ease-in-out infinite; }
+      .ship-error { margin: 10px 0; padding: 10px 12px; border-radius: 8px; color: #d66b6b; background: color-mix(in srgb, #d66b6b 16%, transparent); font-size: 13px; }
       @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes ship-load { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
       .env.on { border-color: var(--vscode-focusBorder); }
       .env header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
       .env header span { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; opacity: .55; }
       .env p { margin: 0; font-size: 13px; line-height: 1.45; opacity: .8; }
       .env code { display: block; margin-top: 10px; font-size: 12px; }
       pre.log { max-height: 320px; overflow: auto; margin: 16px 0; padding: 12px; border-radius: 8px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.12)); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+      .sheet.fill.ship { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 12px 16px 8px; }
+      .sheet.ship .localbar { flex: none; margin: 8px 0 10px; }
+      .sheet.ship .logwrap { flex: 1; min-height: 180px; }
+      .ship-more { flex: none; margin: 6px 0 0; }
+      .ship-more summary { cursor: pointer; font-size: 12px; opacity: .75; }
+      .ship-foot { flex: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
+      .logwrap { flex: 1; min-height: 140px; display: flex; flex-direction: column; }
+      .logbar { display: flex; gap: 8px; flex-wrap: wrap; }
+      .logbar input, .logbar select { flex: 1; min-width: 120px; }
+      .sheet.ship pre.log { flex: 1; max-height: none; min-height: 0; margin: 8px 0 0; }
+      .meters { display: flex; gap: 16px; margin: 8px 0; font-size: 12px; }
+      .meters em { font-style: normal; opacity: .6; margin-right: 6px; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+      .localbar header strong { font-size: 16px; }
+      .bearer-note { margin: 12px 0 0; padding: 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, #c47a2a 55%, transparent); border-left: 3px solid #c47a2a; background: color-mix(in srgb, #c47a2a 10%, transparent); }
+      .bearer-note strong { display: block; margin: 10px 0 4px; }
+      .bearer-note p { margin: 0; font-size: 13px; line-height: 1.45; }
+      button.attention { display: inline-block; background: #c47a2a; color: #1a1208; font-weight: 650; }
+      .localbar header .statusline[data-state="running"] { color: #3f9d68; opacity: 1; }
+      .localbar header .statusline[data-state="failed"] { color: #d66b6b; opacity: 1; }
       ul.secrets { list-style: none; padding: 0; margin: 16px 0; }
       ul.secrets li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.28)); }
       ul.work { list-style: none; padding: 0; margin: 18px 0; }
@@ -672,10 +798,11 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       <header class="bar">
         <strong>${project ? esc(project.name) : "BigAgentCreator"}</strong>
         ${hasFolder ? `<div class="modes">${project ? `<button type="button" data-mode="flow" class="${ui.mode === "flow" ? "on" : ""}">${t(lang, "design")}</button><button type="button" data-mode="prove" class="${ui.mode === "prove" ? "on" : ""}">${t(lang, "prove")}</button><button type="button" data-mode="platform" class="${ui.mode === "platform" ? "on" : ""}">${t(lang, "platform")}</button><button type="button" data-mode="secrets" class="${ui.mode === "secrets" ? "on" : ""}">${t(lang, "secrets")}</button><button type="button" data-mode="connect" class="${ui.mode === "connect" ? "on" : ""}">${t(lang, "connect")}</button><button type="button" data-mode="deploy" class="${ui.mode === "deploy" ? "on" : ""}">${t(lang, "ship")}</button>` : ""}<button type="button" data-mode="examples" class="${ui.mode === "examples" ? "on" : ""}">${t(lang, "examples")}</button></div>` : ""}
-        <div class="bar-end">${langSwitch(lang)}<button type="button" id="help-open" class="helpbtn">${t(lang, "help")}</button></div>
+        <div class="bar-end">${project ? `<button type="button" id="ask-open" class="askbtn" title="${esc(t(lang, "ask_title"))}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="6" r="3.2" fill="none" stroke="currentColor"/><path d="M4.2 13.2c.6-2 1.8-3 3.8-3s3.2 1 3.8 3" fill="none" stroke="currentColor" stroke-linecap="round"/><circle cx="6.7" cy="5.7" r=".5" fill="currentColor"/><circle cx="9.3" cy="5.7" r=".5" fill="currentColor"/></svg> ${t(lang, "ask")}</button>` : ""}${langSwitch(lang)}<button type="button" id="help-open" class="helpbtn">${t(lang, "help")}</button></div>
       </header>
       ${ui.notice ? `<p class="banner">${esc(ui.notice)}</p>` : ""}${repair}
-      <main>${body}</main>${help}`,
+      <main>${body}</main>${help}
+      ${project ? `<aside id="ask" class="ask"${ui.askOpen ? "" : " hidden"}><header><strong>${t(lang, "ask_title")}</strong><button type="button" id="ask-close">${t(lang, "close")}</button></header><p class="hint">${esc(phrase(lang, ui.lm?.reason || "Test the editor model before asking."))}</p><div class="row"><button type="button" id="lm-test">${t(lang, "lm_test")}</button></div><div id="ask-log">${(ui.ask || []).map((line) => `<p class="${line.role}"><strong>${line.role === "you" ? t(lang, "ask_you") : t(lang, "ask")}</strong> ${esc(line.text)}</p>`).join("")}</div><form id="ask-form"><textarea id="ask-text" ${ui.lm?.ok ? "" : "disabled"} placeholder="${esc(t(lang, "ask_ph"))}"></textarea><div class="row"><button type="submit" class="primary" ${ui.lm?.ok ? "" : "disabled"}>${t(lang, "ask_send")}</button></div></form></aside>` : ""}`,
     `const vscode = acquireVsCodeApi();
     const state = ${data};
     const uiText = ${JSON.stringify({
@@ -696,6 +823,25 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       phMeans: t(lang, "ph_means"),
       remove: t(lang, "remove"),
     }).replace(/</g, "\\u003c")};
+    for (const button of document.querySelectorAll("[data-init-example]")) {
+      button.addEventListener("click", () => vscode.postMessage({ type: "create-example", id: button.dataset.initExample }));
+    }
+    for (const button of document.querySelectorAll("[data-set-secret]")) {
+      button.addEventListener("click", () => vscode.postMessage({ type: "open-secret", name: button.dataset.setSecret }));
+    }
+    const secretName = document.getElementById("secret-name");
+    const secretValue = document.getElementById("secret-value");
+    if (secretName && secretName.value && secretValue) secretValue.focus();
+    document.getElementById("simulate-flow")?.addEventListener("click", () => { const box = document.getElementById("flow-sim"); if (box) box.hidden = false; });
+    document.getElementById("flow-sim-close")?.addEventListener("click", () => { const box = document.getElementById("flow-sim"); if (box) box.hidden = true; });
+    document.getElementById("ask-open")?.addEventListener("click", () => vscode.postMessage({ type: "ask-open" }));
+    document.getElementById("ask-close")?.addEventListener("click", () => vscode.postMessage({ type: "ask-open" }));
+    document.getElementById("lm-test")?.addEventListener("click", () => vscode.postMessage({ type: "lm-test" }));
+    document.getElementById("ask-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = document.getElementById("ask-text")?.value || "";
+      vscode.postMessage({ type: "lm-ask", text });
+    });
     document.getElementById("create-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
       vscode.postMessage({ type: "create", name: new FormData(event.target).get("name") });
@@ -1082,6 +1228,38 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       void el.offsetWidth;
       el.classList.add("flash");
     }
+    let logLines = [];
+    function logRank(line) {
+      if (/\\b(error|failed|failure|exception|panic)\\b/i.test(line)) return "error";
+      if (/\\bwarn(?:ing)?\\b/i.test(line)) return "warn";
+      return "info";
+    }
+    function paintLogs() {
+      const pre = document.getElementById("ship-log");
+      if (!pre) return;
+      const query = (document.getElementById("log-search")?.value || "").toLowerCase();
+      const level = document.getElementById("log-level")?.value || "all";
+      const fromValue = document.getElementById("log-from")?.value || "";
+      const toValue = document.getElementById("log-to")?.value || "";
+      const from = fromValue ? Date.parse(fromValue) : NaN;
+      const to = toValue ? Date.parse(toValue) + 59999 : NaN;
+      const shown = logLines.filter((line) => {
+        if (!String(line).trim()) return false;
+        if (query && !String(line).toLowerCase().includes(query)) return false;
+        if (level !== "all" && logRank(line) !== level) return false;
+        const stamp = (String(line).match(/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z/) || [])[0];
+        if (stamp && !Number.isNaN(from) && Date.parse(stamp) < from) return false;
+        if (stamp && !Number.isNaN(to) && Date.parse(stamp) > to) return false;
+        return true;
+      });
+      pre.textContent = shown.join("\\n") || uiText.noLog;
+    }
+    const logSeed = document.getElementById("log-seed");
+    if (logSeed) {
+      try { logLines = String(JSON.parse(logSeed.textContent || '""')).split(/\\n/); } catch (e) { logLines = []; }
+      for (const id of ["log-search", "log-level", "log-from", "log-to"]) document.getElementById(id)?.addEventListener("input", paintLogs);
+      paintLogs();
+    }
     let savedWait;
     window.addEventListener("message", (event) => {
       const data = event.data || {};
@@ -1090,11 +1268,10 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         savedWait = setTimeout(markSaved, 180);
       }
       if (data.type === "ship-log") {
+        String(data.text || "").split(/\\n/).forEach((line) => { if (line) logLines.push(line); });
+        paintLogs();
         const pre = document.getElementById("ship-log");
-        if (!pre) return;
-        if (pre.textContent === uiText.noLog) pre.textContent = "";
-        pre.textContent += data.text;
-        pre.scrollTop = pre.scrollHeight;
+        if (pre) pre.scrollTop = pre.scrollHeight;
       }
       if (data.type === "hint") {
         const el = document.getElementById("saved");

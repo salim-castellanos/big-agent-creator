@@ -28,6 +28,13 @@ import {
   loadProject,
   readLayout,
   scanWorkspace,
+  cardNeeds,
+  composeIsRunning,
+  DOCKER_DOWN,
+  DOCKER_MISSING,
+  DOCKER_SILENT,
+  dockerProblem,
+  lmGate,
   scrubLogs,
   secretValue,
   slackCheckTarget,
@@ -117,7 +124,12 @@ class Home implements vscode.WebviewViewProvider {
   private future: FolderShot[] = [];
   private clip?: Item;
   private pulseAt = 0;
-  private ship: ShipStatus = { docker: "unknown", running: false, phase: "idle", summary: "Checking this machine.", logs: "", publicUrl: "" };
+  private ship: ShipStatus = { docker: "unknown", running: false, failed: false, phase: "idle", summary: "Stopped. Start builds the image and runs it here.", logs: "", publicUrl: "", stats: { cpu: "—", memory: "—", healthMs: null } };
+  private lm: { ok: boolean; reason: string } = { ok: false, reason: "Test the editor model before asking." };
+  private lmModel: vscode.LanguageModelChat | undefined;
+  private ask: { role: "you" | "guide"; text: string }[] = [];
+  private askOpen = false;
+  private secretFocus = "";
   private shipProc?: ChildProcess;
   private tunnelProc?: ChildProcess;
   private shipGen = 0;
@@ -216,15 +228,17 @@ class Home implements vscode.WebviewViewProvider {
     return `${item.kind}:${name}`;
   }
 
-  private docker(root: string, args: string[], onChunk?: (text: string) => void, track = false): Promise<number> {
+  private docker(root: string, args: string[], onChunk?: (text: string) => void, track = false, timeoutMs = 20000): Promise<number> {
     return new Promise((resolve) => {
       let settled = false;
+      let child: ChildProcess | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (code: number) => {
         if (settled) return;
         settled = true;
+        if (timer) clearTimeout(timer);
         resolve(code);
       };
-      let child: ChildProcess;
       try {
         child = spawn("docker", args, { cwd: root, windowsHide: true, shell: process.platform === "win32" });
       } catch (error) {
@@ -233,6 +247,14 @@ class Home implements vscode.WebviewViewProvider {
         return;
       }
       if (track) this.shipProc = child;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          onChunk?.("Docker did not answer in time.\n");
+          if (child?.pid && process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+          else child?.kill();
+          finish(1);
+        }, timeoutMs);
+      }
       const take = (chunk: Buffer) => onChunk?.(chunk.toString("utf8"));
       child.stdout?.on("data", take);
       child.stderr?.on("data", take);
@@ -244,67 +266,127 @@ class Home implements vscode.WebviewViewProvider {
     });
   }
 
+  private shipNote(gen: number, text: string): void {
+    if (gen !== this.shipGen) return;
+    const line = text.endsWith("\n") ? text : `${text}\n`;
+    this.ship = { ...this.ship, logs: (this.ship.logs + line).slice(-12000) };
+    const spoken = phrase(readUi(this.context).lang, line.replace(/\n$/, ""));
+    this.panel?.webview.postMessage({ type: "ship-log", text: `${spoken}\n` });
+  }
+
   private daemonDown(text: string): boolean {
     return /dockerDesktopLinuxEngine|Cannot connect to the Docker daemon|error during connect|cannot find the file specified/i.test(text);
   }
 
   private async refreshShip(root: string): Promise<void> {
     const gen = this.shipGen;
-    if (this.ship.phase === "idle") {
-      this.ship = { ...this.ship, phase: "checking", summary: "Checking this machine." };
+    const wasStart = this.ship.phase === "building" || this.ship.phase === "rebuilding";
+    try {
+    if (this.ship.phase === "idle" || this.ship.phase === "checking") {
+      this.ship = { ...this.ship, phase: "checking", summary: "Checking Docker on this machine.", logs: `${this.ship.logs}Checking Docker on this machine.\n`.slice(-12000) };
       this.render();
     }
     const names = loadProject(root).secrets.map((row) => row.name);
     let info = "";
     const infoCode = await this.docker(root, ["info", "--format", "{{.ServerVersion}}"], (text) => {
       info += text;
-    });
+      this.shipNote(gen, scrubLogs(text, names));
+    }, false, 12000);
     if (gen !== this.shipGen) return;
     if (infoCode !== 0 || this.daemonDown(info)) {
+      const problem = dockerProblem(info);
+      const missing = problem === "missing";
       this.ship = {
         docker: "down",
         running: false,
+        failed: false,
         phase: "idle",
-        summary: "Docker Desktop is not running. Open it, wait until it is ready, then Start.",
-        logs: scrubLogs(info, names).slice(-8000),
+        dockerWhy: missing ? "missing" : "down",
+        summary: missing ? DOCKER_MISSING : /did not answer in time/i.test(info) ? DOCKER_SILENT : DOCKER_DOWN,
+        logs: scrubLogs(this.ship.logs, names).slice(-8000),
         publicUrl: this.ship.publicUrl,
+        stats: { cpu: "—", memory: "—", healthMs: null },
       };
       this.render();
       return;
     }
     let ps = "";
+    this.shipNote(gen, "Docker answered. Checking the container.");
     const psCode = await this.docker(root, ["compose", "ps", "--format", "json"], (text) => {
       ps += text;
-    });
+    }, false, 12000);
     if (gen !== this.shipGen) return;
     if (psCode !== 0 || this.daemonDown(ps)) {
       this.ship = {
         docker: "down",
         running: false,
+        failed: false,
         phase: "idle",
-        summary: "Docker Desktop is not running. Open it, wait until it is ready, then Start.",
+        dockerWhy: "down",
+        summary: DOCKER_DOWN,
         logs: scrubLogs(ps || info, names).slice(-8000),
         publicUrl: this.ship.publicUrl,
+        stats: { cpu: "—", memory: "—", healthMs: null },
       };
       this.render();
       return;
     }
     let logs = "";
-    await this.docker(root, ["compose", "logs", "--tail", "80", "--no-color"], (text) => {
+    this.shipNote(gen, "Reading the container log.");
+    await this.docker(root, ["compose", "logs", "--tail", "200", "-t", "--no-color"], (text) => {
       logs += text;
-    });
+    }, false, 12000);
     if (gen !== this.shipGen) return;
     const clean = scrubLogs(logs, names);
-    const running = /"State"\s*:\s*"running"/.test(ps);
+    const running = composeIsRunning(ps);
+    const failed = wasStart && !running;
+    const stats = running ? await this.localStats(root) : { cpu: "—", memory: "—", healthMs: null };
+    if (gen !== this.shipGen) return;
     this.ship = {
       docker: "ready",
       running,
+      failed,
       phase: "idle",
-      summary: running ? "Listening on http://127.0.0.1:3000." : "Stopped. Start builds the image and runs it here.",
+      summary: running ? "Listening on http://127.0.0.1:3000." : failed ? "The container is not running. Read the log." : "Stopped. Start builds the image and runs it here.",
       logs: clean.slice(-8000),
       publicUrl: this.ship.publicUrl,
+      stats,
     };
     this.render();
+    } catch (error) {
+      if (gen !== this.shipGen) return;
+      const message = error instanceof Error ? error.message : "The check stopped.";
+      this.ship = { ...this.ship, phase: "idle", failed: true, running: false, summary: message, logs: `${this.ship.logs}${message}\n`.slice(-8000) };
+      this.render();
+    }
+  }
+
+  private async localStats(root: string): Promise<{ cpu: string; memory: string; healthMs: number | null }> {
+    const stats = { cpu: "—", memory: "—", healthMs: null as number | null };
+    let ids = "";
+    const idCode = await this.docker(root, ["compose", "ps", "-q"], (text) => {
+      ids += text;
+    }, false, 8000);
+    const cid = idCode === 0 ? ids.trim().split(/\s+/)[0] : "";
+    if (cid) {
+      let line = "";
+      const code = await this.docker(root, ["stats", "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}", cid], (text) => {
+        line += text;
+      }, false, 8000);
+      const [cpu, memory] = line.trim().split("|");
+      if (code === 0 && cpu && memory) {
+        stats.cpu = cpu;
+        stats.memory = memory;
+      }
+    }
+    const started = Date.now();
+    try {
+      const response = await fetch("http://127.0.0.1:3000/playground", { signal: AbortSignal.timeout(2000) });
+      if (response.ok) stats.healthMs = Date.now() - started;
+    } catch {
+      stats.healthMs = null;
+    }
+    return stats;
   }
 
   private async compose(root: string, args: string[], phase: "building" | "stopping" | "rebuilding"): Promise<void> {
@@ -314,8 +396,8 @@ class Home implements vscode.WebviewViewProvider {
     this.ship = {
       ...this.ship,
       phase,
-      summary: phase === "rebuilding" ? "Rebuilding the image and recreating the container so it reads the current secrets." : phase === "building" ? "Building the local image." : "Stopping the local agent.",
-      logs: "",
+      summary: phase === "rebuilding" ? "Rebuilding the image and recreating the container so it reads the current secrets." : phase === "building" ? "Building the local image. The log shows each step." : "Stopping the local agent.",
+      logs: phase === "building" ? "Building the local image. The log shows each step.\n" : phase === "rebuilding" ? "Rebuilding the image and recreating the container so it reads the current secrets.\n" : "Stopping the local agent.\n",
     };
     this.render();
     const code = await this.docker(
@@ -328,22 +410,29 @@ class Home implements vscode.WebviewViewProvider {
         this.panel?.webview.postMessage({ type: "ship-log", text: clean });
       },
       true,
+      0,
     );
     if (gen !== this.shipGen) return;
     if (code !== 0 || this.daemonDown(this.ship.logs)) {
-      const down = this.daemonDown(this.ship.logs);
+      const why = dockerProblem(this.ship.logs);
+      const down = why === "down" || this.daemonDown(this.ship.logs);
+      const missing = why === "missing";
       this.ship = {
         ...this.ship,
-        docker: down ? "down" : this.ship.docker,
+        docker: missing || down ? "down" : this.ship.docker,
+        dockerWhy: missing ? "missing" : down ? "down" : this.ship.dockerWhy,
         running: false,
+        failed: !missing && !down,
         phase: "idle",
-        summary: down
-          ? "Docker Desktop is not running. Open it, wait until it is ready, then Start."
-          : phase === "building"
-            ? "The build stopped. Read the log."
-            : phase === "rebuilding"
-              ? "Rebuild did not finish. Read the log."
-              : "Stop did not finish. Read the log.",
+        summary: missing
+          ? DOCKER_MISSING
+          : down
+            ? DOCKER_DOWN
+            : phase === "building"
+              ? "The build stopped. Read the log."
+              : phase === "rebuilding"
+                ? "Rebuild did not finish. Read the log."
+                : "Stop did not finish. Read the log.",
       };
       this.render();
       return;
@@ -544,6 +633,73 @@ class Home implements vscode.WebviewViewProvider {
     term.sendText("docker compose logs -f --tail 100");
   }
 
+  private async probeLm(): Promise<void> {
+    this.askOpen = true;
+    const select = vscode.lm?.selectChatModels;
+    if (!select) {
+      this.lmModel = undefined;
+      this.lm = lmGate({ hasApi: false, modelCount: 0, replied: false });
+      this.render();
+      return;
+    }
+    try {
+      const models = await select({});
+      this.lmModel = models[0];
+      if (!models.length) {
+        this.lm = lmGate({ hasApi: true, modelCount: 0, replied: false });
+        this.render();
+        return;
+      }
+      const text = await this.askModel("Reply with the single word ready.", models[0]);
+      this.lm = lmGate({ hasApi: true, modelCount: models.length, replied: text.trim().length > 0 });
+    } catch {
+      this.lmModel = undefined;
+      this.lm = { ok: false, reason: "The editor model did not answer. Test again." };
+    }
+    this.render();
+  }
+
+  private async askLm(root: string, question: string): Promise<void> {
+    const text = question.trim().slice(0, 2000);
+    if (!text || !this.lm.ok || !this.lmModel) return;
+    this.askOpen = true;
+    this.ask = [...this.ask, { role: "you", text }].slice(-12);
+    const project = loadProject(root);
+    const missing = cardNeeds(project).flatMap((row) => row.missing);
+    const cards = [project.think ? project.name : "", ...project.items.map((item) => `${item.kind}:${item.name}`)].filter(Boolean);
+    const prompt = [
+      "You help finish an agent designed on a canvas. Answer in the same language as the question. Name the card and what to set. Do not invent a secret value.",
+      `Cards: ${cards.join(", ")}`,
+      missing.length ? `Missing:\n${missing.join("\n")}` : "The cards have the minimum configuration.",
+      `Question: ${text}`,
+    ].join("\n\n");
+    try {
+      const answer = (await this.askModel(prompt, this.lmModel)).trim();
+      this.ask = [...this.ask, { role: "guide", text: answer || "The editor model returned an empty answer." }].slice(-12);
+    } catch {
+      this.lmModel = undefined;
+      this.lm = { ok: false, reason: "The editor model did not answer. Test again." };
+    }
+    this.render();
+  }
+
+  private async askModel(prompt: string, model: vscode.LanguageModelChat): Promise<string> {
+    const token = new vscode.CancellationTokenSource();
+    const timer = setTimeout(() => token.cancel(), 20000);
+    try {
+      const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], {}, token.token);
+      let text = "";
+      for await (const chunk of response.text) {
+        text += chunk;
+        if (text.length > 4000) break;
+      }
+      return text;
+    } finally {
+      clearTimeout(timer);
+      token.dispose();
+    }
+  }
+
   private render(notice?: string, saved = false): void {
     if (notice !== undefined) this.holdNotice = notice;
     if (saved) this.pulseAt = Date.now();
@@ -551,7 +707,7 @@ class Home implements vscode.WebviewViewProvider {
     if (root && this.panel) this.follow(root);
     const savedUi = readUi(this.context);
     const lang = savedUi.lang === "es" ? "es" : "en";
-    const ui = { ...savedUi, notice: phrase(lang, this.holdNotice), helpOpen: this.helpOpen };
+    const ui = { ...savedUi, notice: phrase(lang, this.holdNotice), helpOpen: this.helpOpen, askOpen: this.askOpen, lm: this.lm, ask: this.ask, secretFocus: this.secretFocus };
     this.helpOpen = false;
     const project = root && isProject(root) ? loadProject(root) : null;
     const scan = root ? scanWorkspace(root) : undefined;
@@ -769,6 +925,36 @@ class Home implements vscode.WebviewViewProvider {
         this.render("", true);
         return;
       }
+      if (message.type === "create-example" && root && message.id && EXAMPLES.some((example) => example.id === message.id)) {
+        if (isExtensionRoot(root)) {
+          this.render("Open the agent folder. This one is the extension.");
+          return;
+        }
+        try {
+          const loaded = loadExample(path.join(this.examplesRoot(), message.id), root);
+          const card = EXAMPLES.find((example) => example.id === message.id);
+          const kept = loaded.keptFresh ? "This folder was kept in .keep/original." : ".keep/original was already there and was not replaced.";
+          const env = loaded.keptEnv ? " Your .env stayed." : "";
+          await writeUi(this.context, { ...ui, mode: "flow", selected: "agent", notice: "" });
+          this.render(`Loaded ${card?.title || message.id}. ${kept}${env}`, true);
+        } catch (error) {
+          this.render(error instanceof Error ? error.message : "That example is not in this extension.");
+        }
+        return;
+      }
+      if (message.type === "ask-open") {
+        this.askOpen = !this.askOpen;
+        this.render();
+        return;
+      }
+      if (message.type === "lm-test") {
+        await this.probeLm();
+        return;
+      }
+      if (message.type === "lm-ask" && root && isProject(root)) {
+        await this.askLm(root, String(message.text || ""));
+        return;
+      }
       if (message.type === "repair" && root && isProject(root)) {
         this.remember(root);
         initWorkspace(root, loadProject(root).name);
@@ -806,6 +992,12 @@ class Home implements vscode.WebviewViewProvider {
         return;
       }
       if (!root || !isProject(root)) return;
+      if (message.type === "open-secret" && message.name) {
+        this.secretFocus = String(message.name);
+        await writeUi(this.context, { ...ui, mode: "secrets", notice: "" });
+        this.render();
+        return;
+      }
       if (message.type === "mode" && message.mode) {
         await writeUi(this.context, { ...ui, mode: message.mode, notice: "" });
         this.render("");
@@ -822,7 +1014,12 @@ class Home implements vscode.WebviewViewProvider {
         return;
       }
       if (message.type === "ship") {
-        if (message.task === "refresh") await this.refreshShip(root);
+        if (message.task === "refresh") {
+          this.shipGen += 1;
+          this.shipProc?.kill();
+          this.ship = { ...this.ship, phase: "idle" };
+          await this.refreshShip(root);
+        }
         else if (message.task === "follow") this.followLogs(root);
         else if (message.task === "playground") await vscode.env.openExternal(vscode.Uri.parse("http://127.0.0.1:3000/playground"));
         else if (message.task === "start") await this.compose(root, ["compose", "up", "--build", "-d"], "building");
@@ -947,6 +1144,7 @@ class Home implements vscode.WebviewViewProvider {
       }
       if (message.type === "secret") {
         setSecret(root, message.name || "", message.value || "");
+        if (this.secretFocus === String(message.name || "")) this.secretFocus = "";
         this.holdNotice = "Saved. Rebuild in Ship so the running agent reads it. The value stays in .env, not in the image.";
         this.render("", true);
         return;

@@ -3,5 +3,6 @@
   "description": "A pull request was opened or updated. GitHub reaches the agent through the connected Cursor account.",
   "verify": false,
   "route": "pull_request",
-  "secret": ""
+  "secret": "",
+  "repo": ""
 }

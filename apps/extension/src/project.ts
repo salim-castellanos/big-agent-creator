@@ -281,6 +281,12 @@ export function loadProject(root: string): Project {
   ];
   const env = readEnv(root);
   const secrets = (meta.secretNames ?? []).map((name) => ({ name, configured: Boolean(env[name]) }));
+  const known = new Set(secrets.map((row) => row.name));
+  for (const name of owedSecretNames(items)) {
+    if (known.has(name)) continue;
+    secrets.push({ name, configured: Boolean(env[name]) });
+    known.add(name);
+  }
   const legacy = meta.model === "fast" || meta.model === "strong" || meta.model === "auto" ? meta.model : "";
   const model = meta.model === "grok-4.5" || meta.model === "composer-2.5" ? meta.model : legacy === "fast" || legacy === "strong" ? "grok-4.5" : "auto";
   const effort = meta.effort === "low" || meta.effort === "medium" || meta.effort === "high" ? meta.effort : legacy === "fast" ? "low" : "high";
@@ -309,6 +315,123 @@ export function loadProject(root: string): Project {
 }
 
 export type Finding = { id: string; message: string };
+
+export type CardNeed = { id: string; missing: string[]; fields: string[] };
+
+function fieldFor(message: string): string | undefined {
+  if (message.startsWith("Write what this agent")) return "scope";
+  if (message.startsWith("Sandbox is recorded")) return "sandbox";
+  if (message.includes("does not say what it calls") || message.includes("No MCP named")) return "calls";
+  if (message.includes("when it loads") || message.includes("when to delegate")) return "when";
+  if (message.includes("has no URL")) return "url";
+  if (message.includes("has no command")) return "command";
+  if (message.includes("cron expression")) return "route-cron";
+  if (message.includes("has no endpoint")) return "route";
+  if (message.includes("no secret name")) return "secret";
+  if (message.includes("does not name an event")) return "field";
+  return undefined;
+}
+
+/** What is still empty on each card. The canvas color, the hover, and Simulate flow read this. */
+export function cardNeeds(project: Project): CardNeed[] {
+  const byId = new Map<string, CardNeed>();
+  const add = (id: string, message: string, field?: string) => {
+    const row = byId.get(id) ?? { id, missing: [], fields: [] };
+    if (!row.missing.includes(message)) row.missing.push(message);
+    if (field && !row.fields.includes(field)) row.fields.push(field);
+    byId.set(id, row);
+  };
+  for (const finding of review(project)) {
+    const id = finding.id === "sandbox" ? "agent" : finding.id;
+    if (id === "scope" || id === "agent" || id.includes(":")) add(id, finding.message, fieldFor(finding.message));
+  }
+  const configured = new Map(project.secrets.map((row) => [row.name, row.configured]));
+  for (const item of project.items) {
+    const id = `${item.kind}:${item.name}`;
+    if (item.kind === "channel") {
+      const need = CHANNEL_NEEDS[item.description];
+      if (need?.repo && !validRepo(item.repo)) add(id, `Set the repository on ${item.name} as owner/name, then Save.`, `repo-${item.description}`);
+      for (const secret of need?.secrets ?? []) {
+        if (!configured.get(secret)) add(id, `${secret} is empty. Set it in Secrets.`, `secret:${secret}`);
+      }
+      if (item.secret?.trim() && !configured.get(item.secret)) add(id, `${item.secret} is empty. Set it in Secrets.`, "secret");
+    }
+    if ((item.kind === "tool" || item.kind === "mcp" || item.kind === "host") && item.secret?.trim() && !configured.get(item.secret)) {
+      add(id, `${item.secret} is empty. Set it in Secrets.`, "secret");
+    }
+  }
+  if (project.think && !configured.get("CURSOR_API_KEY")) add("agent", "CURSOR_API_KEY is empty. Set it in Secrets.", "secret:CURSOR_API_KEY");
+  return [...byId.values()];
+}
+
+export type FlowReport = {
+  ready: boolean;
+  secrets: string[];
+  cards: { id: string; missing: string[] }[];
+  folder: string[];
+};
+
+const SECRET_GAP = /^([A-Z][A-Z0-9_]*) is empty\. Set it in Secrets\.$/;
+
+/** Secrets the person must set, cards that are still unfinished, and folder problems serve would refuse. */
+export function flowReport(project: Project): FlowReport {
+  const secrets: string[] = [];
+  const cards: FlowReport["cards"] = [];
+  for (const row of cardNeeds(project)) {
+    const missing: string[] = [];
+    for (const line of row.missing) {
+      const match = line.match(SECRET_GAP);
+      if (match) secrets.push(match[1]);
+      else missing.push(line);
+    }
+    if (missing.length) cards.push({ id: row.id, missing });
+  }
+  const folder = deliveryCheck(project.root).map((finding) => finding.message);
+  const unique = [...new Set(secrets)];
+  return { ready: unique.length === 0 && cards.length === 0 && folder.length === 0, secrets: unique, cards, folder };
+}
+
+export function simulateFlow(project: Project): { ready: boolean; lines: string[] } {
+  const report = flowReport(project);
+  return {
+    ready: report.ready,
+    lines: [
+      ...report.secrets.map((name) => `${name} is empty. Set it in Secrets.`),
+      ...report.cards.flatMap((row) => row.missing),
+      ...report.folder,
+    ],
+  };
+}
+
+function owedSecretNames(items: Item[]): string[] {
+  const names: string[] = [];
+  for (const item of items) {
+    if (item.kind === "channel") {
+      for (const secret of CHANNEL_NEEDS[item.description]?.secrets ?? []) names.push(secret);
+      if (item.secret?.trim()) names.push(item.secret);
+    }
+    if ((item.kind === "tool" || item.kind === "mcp" || item.kind === "host") && item.secret?.trim()) names.push(item.secret);
+  }
+  names.push("CURSOR_API_KEY");
+  return names;
+}
+
+export function dockerProblem(text: string): "missing" | "down" | "" {
+  if (/not recognized as an internal or external command|ENOENT|Could not start Docker/i.test(text)) return "missing";
+  if (/did not answer in time|dockerDesktopLinuxEngine|Cannot connect to the Docker daemon|error during connect|cannot find the file specified/i.test(text)) return "down";
+  return "";
+}
+
+export const DOCKER_MISSING = "Docker is not installed, or this machine cannot run it. Install Docker, leave it running, then come back to Ship.";
+export const DOCKER_DOWN = "Docker Desktop is not running. Open it, wait until it is ready, then Start.";
+export const DOCKER_SILENT = "Docker did not answer. Open it, wait until it is ready, then Refresh.";
+
+export function lmGate(input: { hasApi: boolean; modelCount: number; replied: boolean }): { ok: boolean; reason: string } {
+  if (!input.hasApi) return { ok: false, reason: "This editor has no language model for extensions. The chat stays off." };
+  if (input.modelCount < 1) return { ok: false, reason: "No language model is available. Sign in to one in the editor, then test again." };
+  if (!input.replied) return { ok: false, reason: "The editor model did not answer. Test again." };
+  return { ok: true, reason: "The editor model answered. You can ask about this canvas." };
+}
 
 export function review(project: Project): Finding[] {
   const out: Finding[] = [];
@@ -1719,6 +1842,45 @@ export function scrubLogs(text: string, names: string[]): string {
     out = out.replace(new RegExp(`${name}=\\S+`, "g"), `${name}=•••`);
   }
   return out.replace(/\d{6,}:[A-Za-z0-9_-]{20,}/g, "•••");
+}
+
+export function composeIsRunning(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const blobs: unknown[] = [];
+  try {
+    blobs.push(JSON.parse(trimmed));
+  } catch {
+    for (const line of trimmed.split(/\n+/)) {
+      const piece = line.trim();
+      if (!piece) continue;
+      try {
+        blobs.push(JSON.parse(piece));
+      } catch {
+        /* compose also prints plain status lines */
+      }
+    }
+  }
+  const rows = blobs.flatMap((blob) => (Array.isArray(blob) ? blob : [blob]));
+  return rows.some((row) => {
+    if (!row || typeof row !== "object") return false;
+    const record = row as Record<string, unknown>;
+    const state = String(record.State ?? record.state ?? record.Status ?? record.status ?? "").toLowerCase();
+    return state === "running" || state.startsWith("up ");
+  });
+}
+
+export function logLevel(line: string): "error" | "warn" | "info" {
+  if (/\b(error|failed|failure|exception|panic)\b/i.test(line)) return "error";
+  if (/\bwarn(?:ing)?\b/i.test(line)) return "warn";
+  return "info";
+}
+
+export function logStamp(line: string): number | null {
+  const match = line.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/);
+  if (!match) return null;
+  const time = Date.parse(match[0]);
+  return Number.isNaN(time) ? null : time;
 }
 
 export function safeRelative(value: string): string | undefined {

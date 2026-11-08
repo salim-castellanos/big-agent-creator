@@ -4,7 +4,9 @@ Retomar por aquí. Lo que ya está en la carpeta se construyó sin HU ni spec. E
 
 ## Siguiente
 
-Probar Slack, GitHub, GitLab y Bitbucket contra sus servicios. El código ya escribe el canal del SDK y Conectar nombra el secreto. WhatsApp sigue `ai-tested` hasta que se use contra Meta.
+Que Preguntar pueda cambiar el lienzo. Hoy solo contesta, y solo después de que el modelo del editor responda la prueba. Está en [HU-001 escribir](docs/05-backlog/03-usar/E-001-empezar/F-005-escribir/HU-001-escribir.md).
+
+Probar Slack, GitHub, GitLab y Bitbucket contra sus servicios. WhatsApp sigue `ai-tested` hasta que se use contra Meta. Ship local sigue `ai-tested` en [002-ship-local](docs/07-runbooks/002-ship-local/runbook.md). Empezar, Docker, el faltante del lienzo y el chat de solo lectura están `ai-tested` en [003-usar](docs/07-runbooks/003-usar/runbook.md).
 
 ## Dónde está
 
