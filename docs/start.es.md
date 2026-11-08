@@ -4,6 +4,8 @@
 
 BigAgentCreator es donde diseñas un agente, lo pruebas en tu máquina y lo dejas listo para correr. El lienzo es el diseño. Al guardar queda una carpeta. Desplegar convierte esa carpeta en una imagen.
 
+![El lienzo. Telegram desk: disparador, límites, agente y una guía.](imgs/flujo.png)
+
 El programa que ejecuta el agente es el Agent SDK (`@grok/agent-sdk`). Lee `bot/agent.ts` e `instructions.md` con `agent-sdk serve`. El lienzo escribe esa carpeta para que el SDK pueda cargarla.
 
 El SDK llama al modelo de Cursor. Esa llamada usa `CURSOR_API_KEY`, tu clave de usuario de Cursor. No es la licencia del editor ni una clave de administrador de equipo. Si un camino llega a la tarjeta Agente y la clave está vacía, no puede responder. Si el disparador no llega a Agente, la respuesta sale en código y la clave no se usa. El valor va en Secretos. Queda en `.env` y no se copia a la imagen.

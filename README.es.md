@@ -2,9 +2,17 @@
 
 [English](./README.md) | **Español**
 
+![El lienzo. Telegram desk: disparador, límites, agente y una guía.](docs/imgs/flujo.png)
+
 Extensión para VS Code y Cursor. Diseñas un agente de IA como un flujo en un lienzo y lo guardas como carpeta: disparadores, límites, herramientas, guías y un chat de Telegram. Esa carpeta corre en Docker y se prueba en el playground. Un camino que no llega a la tarjeta Agent responde en código y no llama a un modelo. Los valores secretos se quedan en `.env`.
 
 La primera versión para la tienda es la **0.2.0**. La extensión está en `apps/extension`. La página que la gente lee en la tienda es `apps/extension/README.md`, en inglés. La frase de búsqueda es `description` en `apps/extension/package.json`. El camino desde una carpeta vacía hasta el playground está en [Empezar](./docs/start.es.md).
+
+## También en la pantalla
+
+| Un flujo más grande | Playground | Telegram |
+| --- | --- | --- |
+| ![Change gate en el lienzo](docs/imgs/BigAgentCreator1.png) | ![Probar y el playground](docs/imgs/BigAgentCreator-InterfazPruebasPalyground.jpg) | ![Una respuesta de Telegram](docs/imgs/BigAgentCreator-Telegram.png) |
 
 ## Qué puedes hacer
 

@@ -1,8 +1,14 @@
 # BigAgentCreator
 
+![The canvas. A Telegram desk: trigger, limits, agent, and a guide.](media/gallery/flujo.png)
+
 Design an AI agent as a workflow on a canvas, save it as a folder, and run that folder in Docker on your machine.
 
 You stay in VS Code or Cursor. The drawing is not a picture of the agent. Each save writes the Agent SDK files. A trigger, a tool, a guide, and a Telegram chat are files you can open. Secret values stay in `.env`. The image never contains one.
+
+| A larger flow | Playground | Telegram |
+| --- | --- | --- |
+| ![Change gate on the canvas](media/gallery/BigAgentCreator1.png) | ![Prove and the playground](media/gallery/BigAgentCreator-InterfazPruebasPalyground.jpg) | ![A Telegram reply](media/gallery/BigAgentCreator-Telegram.png) |
 
 ## What you can build
 

@@ -4,6 +4,8 @@
 
 BigAgentCreator is where you design an agent, try it on your machine, and leave it ready to run. The canvas is the design. Saving writes a folder. Ship turns that folder into an image.
 
+![The canvas. A Telegram desk: trigger, limits, agent, and a guide.](imgs/flujo.png)
+
 The program that runs the agent is the Agent SDK (`@grok/agent-sdk`). It reads `bot/agent.ts` and `instructions.md` with `agent-sdk serve`. The canvas writes that folder so the SDK can load it.
 
 The SDK calls Cursor's model. That call uses `CURSOR_API_KEY`, your Cursor user API key. It is not the editor license, and it is not a Team Admin key. A path that reaches the Agent card cannot answer while the key is empty. A trigger that never reaches Agent answers in code and does not use the key. Put the value in Secrets. It stays in `.env` and is not copied into the image.

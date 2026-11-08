@@ -2,9 +2,17 @@
 
 **English** | [Español](./README.es.md)
 
+![The canvas. A Telegram desk: trigger, limits, agent, and a guide.](docs/imgs/flujo.png)
+
 An extension for VS Code and Cursor. You design an AI agent as a workflow on a canvas and save it as a folder: triggers, limits, tools, guides, and a Telegram chat. You run that folder in Docker and try it in the playground. A path that never reaches the Agent card answers in code and does not call a model. Secret values stay in `.env`.
 
 The first Marketplace release is **0.2.0**. The extension is `apps/extension`. The page people read in the store is `apps/extension/README.md`. The one-line search text is the `description` in `apps/extension/package.json`. The path from an empty folder to a playground reply is [Start](./docs/start.md).
+
+## Also on the screen
+
+| A larger flow | Playground | Telegram |
+| --- | --- | --- |
+| ![Change gate on the canvas](docs/imgs/BigAgentCreator1.png) | ![Prove and the playground](docs/imgs/BigAgentCreator-InterfazPruebasPalyground.jpg) | ![A Telegram reply](docs/imgs/BigAgentCreator-Telegram.png) |
 
 ## What you can do
 
@@ -56,7 +64,7 @@ npx @vscode/vsce@2.32.0 publish --skip-license
 Before the first publish:
 
 - The icon is `media/icon.png` (256 px). Do not replace it with a file that has text inside.
-- `README.md` in `apps/extension` is the store page. Keep it in English.
+- `README.md` in `apps/extension` is the store page. Keep it in English. Its pictures live in `apps/extension/media/gallery` (the same files as `docs/imgs`). The picture at the top is `flujo.png`.
 - The public git is https://github.com/salim-castellanos/big-agent-creator. `repository` is already set, so publish does not need `--allow-missing-repository`.
 - No license file is chosen yet. Add one before a public publish if you want the listing to name it.
 
