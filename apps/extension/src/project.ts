@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { phrase, type Lang } from "./copy";
 
 export type Kind = "tool" | "skill" | "mcp" | "channel" | "schedule" | "subagent" | "hook" | "host";
 
@@ -427,11 +429,161 @@ export const DOCKER_DOWN = "Docker Desktop is not running. Open it, wait until i
 export const DOCKER_SILENT = "Docker did not answer. Open it, wait until it is ready, then Refresh.";
 export const PORT_CLOSED = "The container is running, but this machine is not listening on port 3000. Start publishes it again.";
 
-export function lmGate(input: { hasApi: boolean; modelCount: number; replied: boolean }): { ok: boolean; reason: string } {
-  if (!input.hasApi) return { ok: false, reason: "This editor has no language model for extensions. The chat stays off." };
-  if (input.modelCount < 1) return { ok: false, reason: "No language model is available. Sign in to one in the editor, then test again." };
-  if (!input.replied) return { ok: false, reason: "The editor model did not answer. Test again." };
-  return { ok: true, reason: "The editor model answered. You can ask about this canvas." };
+export const PLATFORM_RULES = [
+  "You help finish an agent on this canvas. Answer in the same language as the question.",
+  "Name the card and what to set. Do not write files. When one change should be saved, end with a proposal fence: ```proposal {\"kind\":\"tool\",\"name\":\"lookup\",\"description\":\"Find\",\"calls\":\"mcp:knowledge\",\"effect\":\"read\"} ```",
+  "Allowed kinds: tool, skill, channel, schedule, mcp, host, subagent, hook, scope, instructions. scope is {\"kind\":\"scope\",\"scope\":\"what to refuse\"}. instructions is {\"kind\":\"instructions\",\"body\":\"...\"}. Never put a secret value in the fence.",
+  "Do not invent a secret value. Do not read or repeat a .env value.",
+  "CURSOR_API_KEY calls the model when an arrow reaches Agent.",
+  "AGENT_SDK_BEARER_TOKEN locks the agent address. Empty is fine on this machine. A tunnel or Cloud Run should set it.",
+  "A trigger whose arrow does not reach Agent answers in code and does not call the model.",
+  "Cloud Run is the first cloud and it does not deploy yet.",
+].join(" ");
+
+export type Proposal =
+  | { kind: "scope"; scope: string }
+  | { kind: "instructions"; body: string }
+  | { kind: Kind; name: string; description: string; body: string; calls: string; route: string; repo: string; effect: Effect; url: string; secret: string };
+
+const PROPOSAL_FENCE = /```proposal\s*([\s\S]*?)```/i;
+
+export function readProposal(text: string): Proposal | null {
+  const match = text.match(PROPOSAL_FENCE);
+  if (!match) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  if ("value" in row || "secretValue" in row || "token" in row || "password" in row) return null;
+  if (row.kind === "scope") {
+    const scope = String(row.scope || "").trim();
+    return scope ? { kind: "scope", scope: scope.slice(0, 2000) } : null;
+  }
+  if (row.kind === "instructions") {
+    const body = String(row.body || "").trim();
+    return body ? { kind: "instructions", body: body.slice(0, 8000) } : null;
+  }
+  if (!LIBRARY_KINDS.includes(row.kind as Kind)) return null;
+  const name = String(row.name || "").trim();
+  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(name)) return null;
+  const secret = String(row.secret || "");
+  if (secret && !/^[A-Z][A-Z0-9_]*$/.test(secret)) return null;
+  return {
+    kind: row.kind as Kind,
+    name,
+    description: String(row.description || "").slice(0, 400),
+    body: String(row.body || "").slice(0, 4000),
+    calls: String(row.calls || "").slice(0, 200),
+    route: String(row.route || "").slice(0, 120),
+    repo: String(row.repo || "").slice(0, 80),
+    effect: effectOf(row.effect),
+    url: String(row.url || "").slice(0, 300),
+    secret,
+  };
+}
+
+export function replyWithoutProposal(text: string): string {
+  return text.replace(PROPOSAL_FENCE, "").trim();
+}
+
+export function proposalLabel(proposal: Proposal): string {
+  if (proposal.kind === "scope") return "Update limits.";
+  if (proposal.kind === "instructions") return "Update the agent instructions.";
+  return `Save ${proposal.kind} ${proposal.name}.`;
+}
+
+export function applyProposal(root: string, proposal: Proposal): void {
+  if (proposal.kind === "scope") {
+    saveScope(root, proposal.scope);
+    return;
+  }
+  if (proposal.kind === "instructions") {
+    const body = proposal.body.endsWith("\n") ? proposal.body : `${proposal.body}\n`;
+    saveInstructions(root, body);
+    return;
+  }
+  saveItem(root, {
+    kind: proposal.kind,
+    name: proposal.name,
+    description: proposal.description,
+    body: proposal.body,
+    calls: proposal.calls,
+    route: proposal.route,
+    repo: proposal.repo,
+    effect: proposal.effect,
+    url: proposal.url,
+    secret: proposal.secret,
+  });
+}
+
+export function languageChoice(saved: string | undefined, computer: string | undefined): Lang {
+  if (saved === "en" || saved === "es") return saved;
+  return (computer || "").toLowerCase().startsWith("es") ? "es" : "en";
+}
+
+let computerLocaleCache: string | undefined;
+
+export function computerLocale(): string {
+  if (computerLocaleCache !== undefined) return computerLocaleCache;
+  computerLocaleCache = readComputerLocale();
+  return computerLocaleCache;
+}
+
+function readComputerLocale(): string {
+  try {
+    if (process.platform === "win32") {
+      const out = execFileSync("reg", ["query", "HKCU\\Control Panel\\International", "/v", "LocaleName"], { encoding: "utf8", windowsHide: true, timeout: 3000 });
+      const match = out.match(/LocaleName\s+REG_SZ\s+(\S+)/);
+      if (match) return match[1];
+    }
+  } catch {
+    // The editor language is the fallback when the machine locale cannot be read.
+  }
+  return Intl.DateTimeFormat().resolvedOptions().locale || "en";
+}
+
+export function chatHandoff(project: Project, lang: Lang = "en"): string {
+  const cards = [project.think ? `agent:${project.name}` : "", project.limits ? "limits" : "", ...project.items.map((item) => `${item.kind}:${item.name}`)].filter(Boolean);
+  const missing = cardNeeds(project).flatMap((row) => row.missing).map((line) => phrase(lang, line));
+  if (lang === "es") {
+    return [
+      "Ayudas a terminar este agente en la carpeta abierta. El lienzo se actualiza cuando cambian los archivos.",
+      "Cuando la persona pida un cambio, edita los archivos del agente. No inventes un valor de secreto. No leas ni repitas un valor de .env.",
+      "CURSOR_API_KEY llama al modelo cuando una flecha llega al Agente. AGENT_SDK_BEARER_TOKEN puede quedar vacío en esta máquina.",
+      `Tarjetas: ${cards.join(", ")}`,
+      missing.length ? `Falta:\n${missing.join("\n")}` : "Las tarjetas tienen la configuración mínima.",
+      "La persona escribirá la pregunta después de esto.",
+    ].join("\n\n");
+  }
+  return [
+    "You help finish this agent in the open folder. The canvas reloads when files change.",
+    "When the person asks for a change, edit the agent files. Do not invent a secret value. Do not read or repeat a .env value.",
+    "CURSOR_API_KEY calls the model when an arrow reaches Agent. AGENT_SDK_BEARER_TOKEN can stay empty on this machine.",
+    `Cards: ${cards.join(", ")}`,
+    missing.length ? `Missing:\n${missing.join("\n")}` : "The cards have the minimum configuration.",
+    "The person will type the question after this.",
+  ].join("\n\n");
+}
+
+export function assistantContext(project: Project, question: string): string {
+  const cards = [project.think ? `agent:${project.name}` : "", project.limits ? "limits" : "", ...project.items.map((item) => `${item.kind}:${item.name}`)].filter(Boolean);
+  const missing = cardNeeds(project).flatMap((row) => row.missing);
+  return [
+    PLATFORM_RULES,
+    `Cards: ${cards.join(", ")}`,
+    missing.length ? `Missing:\n${missing.join("\n")}` : "The cards have the minimum configuration.",
+    `Question: ${question.trim().slice(0, 2000)}`,
+  ].join("\n\n");
+}
+
+export function lmGate(input: { hasApi: boolean; modelCount: number }): { ok: boolean; reason: string } {
+  if (!input.hasApi) return { ok: false, reason: "This editor has no language model for extensions." };
+  if (input.modelCount < 1) return { ok: false, reason: "No language model is available. Sign in to one in the editor." };
+  return { ok: true, reason: "Write a question. Sending uses the model you picked." };
 }
 
 export function review(project: Project): Finding[] {
@@ -854,6 +1006,14 @@ export function publicChannelUrl(base: string, channel = "telegram"): string | u
   return `${url.origin}${suffix}/`;
 }
 
+export function webhookNeedsLocal(hook: string): boolean {
+  try {
+    return !new URL(hook).hostname.endsWith(".run.app");
+  } catch {
+    return true;
+  }
+}
+
 export function telegramSetWebhookTarget(
   token: string,
   secret: string,
@@ -874,17 +1034,25 @@ export function telegramSetWebhookTarget(
   };
 }
 
-function readEnv(root: string): Record<string, string> {
-  const file = path.join(root, ".env");
-  if (!fs.existsSync(file)) return {};
+export function parseEnv(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
     const index = trimmed.indexOf("=");
     out[trimmed.slice(0, index)] = trimmed.slice(index + 1);
   }
   return out;
+}
+
+export function envState(env: Record<string, string>, names: string[]): { name: string; present: boolean }[] {
+  return names.map((name) => ({ name, present: Boolean(env[name]?.trim()) }));
+}
+
+function readEnv(root: string): Record<string, string> {
+  const file = path.join(root, ".env");
+  if (!fs.existsSync(file)) return {};
+  return parseEnv(fs.readFileSync(file, "utf8"));
 }
 
 export function setSecret(root: string, name: string, value: string): void {
@@ -1022,13 +1190,794 @@ function removeUnsaved(root: string, saved: Set<string>): void {
   drop(root);
 }
 
+export function imageName(projectName: string): string {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return `bigagent-${slug || "agent"}`;
+}
+
+export function parseImageId(text: string): string | null {
+  const match = text.match(/sha256:[a-f0-9]{64}/);
+  return match ? match[0] : null;
+}
+
+export function composeImageId(text: string): string | null {
+  try {
+    const body = JSON.parse(text) as unknown;
+    const rows = Array.isArray(body) ? body : [body];
+    for (const row of rows) {
+      if (row && typeof row === "object" && "ID" in row && typeof row.ID === "string") {
+        const id = parseImageId(row.ID);
+        if (id) return id;
+      }
+    }
+  } catch {
+    return parseImageId(text);
+  }
+  return parseImageId(text);
+}
+
+export function readImagePin(root: string): string | null {
+  const file = path.join(root, ".bigagent", "image.json");
+  if (!fs.existsSync(file)) return null;
+  try {
+    const body = JSON.parse(fs.readFileSync(file, "utf8")) as { id?: unknown };
+    return typeof body.id === "string" ? parseImageId(body.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeImagePin(root: string, id: string): void {
+  const pin = parseImageId(id);
+  if (!pin || pin !== id.trim()) throw new Error("The image id has to be a sha256 digest.");
+  fs.mkdirSync(path.join(root, ".bigagent"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".bigagent", "image.json"), `${JSON.stringify({ id: pin })}\n`, "utf8");
+}
+
+export type GcpExposure = "internet" | "internal";
+
+export type GcpEnv = { name: string; value: string };
+
+export type GcpLink = {
+  project: string;
+  region: string;
+  exposure: GcpExposure;
+  minInstances: number;
+  maxInstances: number;
+  concurrency: number;
+  cpu: string;
+  memory: string;
+  timeout: number;
+  env: GcpEnv[];
+  url?: string;
+  saved?: boolean;
+};
+
+export const GCP_CPUS = ["1", "2", "4"];
+export const GCP_MEMORY = ["512Mi", "1Gi", "2Gi", "4Gi", "8Gi"];
+
+export type CloudRunPlan = {
+  service: string;
+  project: string;
+  region: string;
+  image: string;
+  ingress: "all" | "internal";
+  allowUnauthenticated: boolean;
+  minInstances: number;
+  maxInstances: number;
+  concurrency: number;
+  cpu: string;
+  memory: string;
+  timeout: number;
+  secrets: string[];
+  env: GcpEnv[];
+  warning: string;
+};
+
+const PUBLIC_CHANNELS = new Set(["telegram", "whatsapp", "slack", "github", "gitlab", "bitbucket", "webhook"]);
+
+export function hasPublicChannel(project: Project): boolean {
+  return project.items.some((item) => item.kind === "channel" && PUBLIC_CHANNELS.has(item.description || ""));
+}
+
+export function defaultGcpLink(): GcpLink {
+  return {
+    project: "",
+    region: "us-central1",
+    exposure: "internet",
+    minInstances: 0,
+    maxInstances: 4,
+    concurrency: 4,
+    cpu: "1",
+    memory: "1Gi",
+    timeout: 300,
+    env: [],
+    url: "",
+    saved: false,
+  };
+}
+
+function wholeNumber(value: unknown): number | null {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isInteger(number) ? number : null;
+}
+
+export function readGcpLink(root: string): GcpLink {
+  const file = path.join(root, ".bigagent", "gcp.json");
+  const fallback = defaultGcpLink();
+  if (!fs.existsSync(file)) return fallback;
+  try {
+    const body = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<GcpLink>;
+    const minInstances = wholeNumber(body.minInstances);
+    const maxInstances = wholeNumber(body.maxInstances);
+    const concurrency = wholeNumber(body.concurrency);
+    const timeout = wholeNumber(body.timeout);
+    const env = Array.isArray(body.env)
+      ? body.env.flatMap((row) => {
+          if (!row || typeof row !== "object") return [];
+          const name = "name" in row && typeof row.name === "string" ? row.name.trim() : "";
+          const value = "value" in row && typeof row.value === "string" ? row.value : "";
+          return name ? [{ name, value }] : [];
+        }).slice(0, 20)
+      : [];
+    return {
+      project: typeof body.project === "string" ? body.project.trim() : "",
+      region: typeof body.region === "string" && body.region.trim() ? body.region.trim() : "us-central1",
+      exposure: body.exposure === "internal" ? "internal" : "internet",
+      minInstances: minInstances !== null && minInstances >= 0 && minInstances <= 20 ? minInstances : fallback.minInstances,
+      maxInstances: maxInstances !== null && maxInstances >= 1 && maxInstances <= 100 ? maxInstances : fallback.maxInstances,
+      concurrency: concurrency !== null && concurrency >= 1 && concurrency <= 80 ? concurrency : fallback.concurrency,
+      cpu: typeof body.cpu === "string" && GCP_CPUS.includes(body.cpu) ? body.cpu : fallback.cpu,
+      memory: typeof body.memory === "string" && GCP_MEMORY.includes(body.memory) ? body.memory : fallback.memory,
+      timeout: timeout !== null && timeout >= 15 && timeout <= 3600 ? timeout : fallback.timeout,
+      env,
+      url: typeof body.url === "string" && /^https:\/\/[a-z0-9.-]+\.run\.app$/i.test(body.url.trim()) ? body.url.trim() : "",
+      saved: true,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeGcpLink(root: string, link: GcpLink): void {
+  fs.mkdirSync(path.join(root, ".bigagent"), { recursive: true });
+  const previous = fs.existsSync(path.join(root, ".bigagent", "gcp.json")) ? readGcpLink(root) : defaultGcpLink();
+  const url = link.url || previous.url || "";
+  const saved = {
+    project: link.project.trim(),
+    region: link.region.trim() || "us-central1",
+    exposure: link.exposure === "internal" ? "internal" : "internet",
+    minInstances: link.minInstances,
+    maxInstances: link.maxInstances,
+    concurrency: link.concurrency,
+    cpu: link.cpu,
+    memory: link.memory,
+    timeout: link.timeout,
+    env: link.env.map((row) => ({ name: row.name, value: row.value })),
+    url,
+  };
+  fs.writeFileSync(path.join(root, ".bigagent", "gcp.json"), `${JSON.stringify(saved)}\n`, "utf8");
+}
+
+export function parseGcpLink(raw: {
+  project?: unknown;
+  region?: unknown;
+  exposure?: unknown;
+  minInstances?: unknown;
+  maxInstances?: unknown;
+  concurrency?: unknown;
+  cpu?: unknown;
+  memory?: unknown;
+  timeout?: unknown;
+  env?: unknown;
+}): { link: GcpLink } | { error: string } {
+  const minInstances = wholeNumber(raw.minInstances);
+  const maxInstances = wholeNumber(raw.maxInstances);
+  const concurrency = wholeNumber(raw.concurrency);
+  const timeout = wholeNumber(raw.timeout);
+  const cpu = typeof raw.cpu === "string" ? raw.cpu : "";
+  const memory = typeof raw.memory === "string" ? raw.memory : "";
+  if (minInstances === null || minInstances < 0 || minInstances > 20) return { error: "Min instances must be a whole number from 0 to 20." };
+  if (maxInstances === null || maxInstances < 1 || maxInstances > 100) return { error: "Max instances must be a whole number from 1 to 100." };
+  if (minInstances > maxInstances) return { error: "Min instances cannot be higher than max instances." };
+  if (concurrency === null || concurrency < 1 || concurrency > 80) return { error: "Concurrency must be a whole number from 1 to 80." };
+  if (!GCP_CPUS.includes(cpu)) return { error: "Pick a CPU size of 1, 2, or 4." };
+  if (!GCP_MEMORY.includes(memory)) return { error: "Pick a memory size the form offers." };
+  if (timeout === null || timeout < 15 || timeout > 3600) return { error: "Timeout must be a whole number of seconds from 15 to 3600." };
+  if (!Array.isArray(raw.env)) return { error: "Plain environment variables are missing." };
+  if (raw.env.length > 20) return { error: "Keep plain environment variables to 20." };
+  const env: GcpEnv[] = [];
+  for (const row of raw.env) {
+    if (!row || typeof row !== "object") return { error: "An environment name must look like PLAIN_NAME." };
+    const name = "name" in row && typeof row.name === "string" ? row.name.trim() : "";
+    const value = "value" in row && typeof row.value === "string" ? row.value : "";
+    if (!name && !value) continue;
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) return { error: "An environment name must look like PLAIN_NAME." };
+    if (name === "BIGAGENT_ADMIT_LOCAL") return { error: "BIGAGENT_ADMIT_LOCAL is only for the local machine." };
+    if (/[,\n\r]/.test(value)) return { error: "An environment value cannot contain a comma or a line break." };
+    env.push({ name, value });
+  }
+  return {
+    link: {
+      project: typeof raw.project === "string" ? raw.project.trim() : "",
+      region: typeof raw.region === "string" ? raw.region.trim() : "",
+      exposure: raw.exposure === "internal" ? "internal" : "internet",
+      minInstances,
+      maxInstances,
+      concurrency,
+      cpu,
+      memory,
+      timeout,
+      env,
+      saved: true,
+    },
+  };
+}
+
+export type SecretSyncReady = { name: string; value: string; source: "environment" | "local" };
+
+export function secretSyncPlan(
+  names: string[],
+  overrides: { name: string; value: string }[],
+  local: Record<string, string>,
+): { ready: SecretSyncReady[]; missing: string[] } {
+  const typed = new Map<string, string>();
+  for (const row of overrides) {
+    if (row && typeof row.name === "string") typed.set(row.name, typeof row.value === "string" ? row.value : "");
+  }
+  const ready: SecretSyncReady[] = [];
+  const missing: string[] = [];
+  for (const name of names) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) continue;
+    const override = (typed.get(name) ?? "").trim();
+    if (override) {
+      ready.push({ name, value: override, source: "environment" });
+      continue;
+    }
+    const stored = (local[name] ?? "").trim();
+    if (stored) {
+      ready.push({ name, value: stored, source: "local" });
+      continue;
+    }
+    missing.push(name);
+  }
+  return { ready, missing };
+}
+
+export type GcpCheck = { ok: boolean; text: string };
+
+export function gcpChecks(input: {
+  imageId: string | null;
+  project: string;
+  region: string;
+  secrets: { name: string; configured: boolean }[];
+}): GcpCheck[] {
+  const imageId = input.imageId ? parseImageId(input.imageId) : null;
+  const short = imageId ? `sha256:${imageId.slice("sha256:".length, "sha256:".length + 12)}` : "";
+  const project = input.project.trim();
+  const region = input.region.trim();
+  const projectOk = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project);
+  const regionOk = /^[a-z]+-[a-z0-9]+\d$/.test(region);
+  const empty = input.secrets.filter((row) => !row.configured).map((row) => row.name);
+  return [
+    imageId
+      ? { ok: true, text: `Image ${short} is the one Deploy will publish.` }
+      : { ok: false, text: "No local image yet. Build it here, then deploy." },
+    projectOk
+      ? { ok: true, text: `GCP project ${project} is set.` }
+      : { ok: false, text: "The GCP project id is missing or not a project id." },
+    regionOk
+      ? { ok: true, text: `Region ${region} is set.` }
+      : { ok: false, text: "The region should look like us-central1." },
+    empty.length
+      ? { ok: false, text: `${empty.join(", ")} has no local value. Sync skips it.` }
+      : { ok: true, text: "Every secret name has a local value." },
+  ];
+}
+
+export type GcpPreview = {
+  state: "need-image" | "ready" | "published";
+  service: string;
+  image: string;
+  target: string;
+  url: string;
+  summary: string;
+};
+
+export function gcpPreview(input: {
+  agentName: string;
+  imageId: string | null;
+  project: string;
+  region: string;
+  url?: string;
+}): GcpPreview {
+  const service = imageName(input.agentName);
+  const imageId = input.imageId ? parseImageId(input.imageId) : null;
+  const image = imageId ? `sha256:${imageId.slice("sha256:".length, "sha256:".length + 12)}` : "";
+  const project = input.project.trim();
+  const region = input.region.trim();
+  const tag = imageId ? imageId.slice("sha256:".length, "sha256:".length + 12) : "";
+  const projectOk = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project);
+  const target = imageId && projectOk && region ? `${region}-docker.pkg.dev/${project}/bigagent/${service}:${tag}` : "";
+  const url = input.url && /^https:\/\/[a-z0-9.-]+\.run\.app$/i.test(input.url) ? input.url : "";
+  if (!imageId) {
+    return { state: "need-image", service, image: "", target: "", url: "", summary: "Build the image on Local first. Deploy publishes that id." };
+  }
+  if (url) return { state: "published", service, image, target, url, summary: `Cloud Run is ready at ${url}.` };
+  if (!projectOk) return { state: "ready", service, image, target: "", url: "", summary: "The local image is ready. Set the GCP project, then deploy." };
+  return { state: "ready", service, image, target, url: "", summary: "Deploy publishes this local image. It does not build another one." };
+}
+
+export function shortImage(imageId: string): string {
+  const id = parseImageId(imageId);
+  if (!id) return "";
+  return `sha256:${id.slice("sha256:".length, "sha256:".length + 12)}`;
+}
+
+export function cloudRunImageMatch(localId: string, remoteImage: string, knownDigest = ""): "same" | "other" | "unknown" {
+  const local = parseImageId(localId);
+  const remote = remoteImage.trim().toLowerCase();
+  if (!local || !remote) return "unknown";
+  if (remote.includes(local)) return "same";
+  const short = local.slice("sha256:".length, "sha256:".length + 12);
+  const tagged = remote.match(/:([a-f0-9]{12})(?:@|$)/);
+  if (tagged) return tagged[1] === short ? "same" : "other";
+  const remoteDigest = remote.match(/sha256:[a-f0-9]{64}/)?.[0] || "";
+  const pinned = knownDigest.trim().toLowerCase().match(/sha256:[a-f0-9]{64}/)?.[0] || "";
+  if (remoteDigest && pinned) return remoteDigest === pinned ? "same" : "other";
+  return "unknown";
+}
+
+export function serviceMissing(text: string): boolean {
+  return /NOT_FOUND|\bnot found\b/i.test(text);
+}
+
+export function parseTrafficRevision(raw: string): { url: string; revision: string } | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as {
+      status?: { url?: unknown; traffic?: { revisionName?: unknown; percent?: unknown }[] };
+      url?: unknown;
+      traffic?: { revisionName?: unknown; percent?: unknown }[];
+    };
+    const status = parsed.status && typeof parsed.status === "object" ? parsed.status : parsed;
+    const traffic = Array.isArray(status.traffic) ? status.traffic : [];
+    const ranked = [...traffic].sort((left, right) => {
+      const rightPercent = typeof right.percent === "number" ? right.percent : 0;
+      const leftPercent = typeof left.percent === "number" ? left.percent : 0;
+      return rightPercent - leftPercent;
+    });
+    const revision = ranked.map((row) => (typeof row.revisionName === "string" ? row.revisionName : "")).find(Boolean) || "";
+    const url = typeof status.url === "string" ? status.url : "";
+    if (!revision && !url) return null;
+    return { url, revision };
+  } catch {
+    return null;
+  }
+}
+
+export type ServiceRelease = { url: string; revision: string; ready: string; created: string; image: string };
+
+export function parseServiceRelease(raw: string): ServiceRelease | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as {
+      spec?: { template?: { spec?: { containers?: { image?: unknown }[] } } };
+      status?: { url?: unknown; latestReadyRevisionName?: unknown; latestCreatedRevisionName?: unknown; traffic?: { revisionName?: unknown; percent?: unknown }[] };
+    };
+    const status = parsed.status && typeof parsed.status === "object" ? parsed.status : {};
+    const traffic = Array.isArray(status.traffic) ? status.traffic : [];
+    const ranked = [...traffic].sort((left, right) => {
+      const rightPercent = typeof right.percent === "number" ? right.percent : 0;
+      const leftPercent = typeof left.percent === "number" ? left.percent : 0;
+      return rightPercent - leftPercent;
+    });
+    const revision = ranked.map((row) => (typeof row.revisionName === "string" ? row.revisionName : "")).find(Boolean) || "";
+    const containers = parsed.spec?.template?.spec?.containers;
+    const image = Array.isArray(containers) && typeof containers[0]?.image === "string" ? containers[0].image : "";
+    const url = typeof status.url === "string" ? status.url : "";
+    const ready = typeof status.latestReadyRevisionName === "string" ? status.latestReadyRevisionName : "";
+    const created = typeof status.latestCreatedRevisionName === "string" ? status.latestCreatedRevisionName : "";
+    if (!revision && !url && !image) return null;
+    return { url, revision, ready, created, image };
+  } catch {
+    return null;
+  }
+}
+
+export function releasedImage(release: ServiceRelease): string {
+  if (!release.revision || !release.image) return "";
+  if (release.created && release.revision !== release.created) return "";
+  if (release.ready && release.revision !== release.ready) return "";
+  return release.image;
+}
+
+export function cloudRunPlan(input: {
+  agentName: string;
+  project: string;
+  region: string;
+  imageId: string;
+  exposure: GcpExposure;
+  hasPublicChannel: boolean;
+  secretNames: string[];
+  minInstances?: number;
+  maxInstances?: number;
+  concurrency?: number;
+  cpu?: string;
+  memory?: string;
+  timeout?: number;
+  env?: GcpEnv[];
+}): { plan: CloudRunPlan } | { error: string } {
+  const project = input.project.trim();
+  const region = input.region.trim();
+  const imageId = parseImageId(input.imageId);
+  if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project)) return { error: "The GCP project id is missing or not a project id." };
+  if (!/^[a-z]+-[a-z0-9]+\d$/.test(region)) return { error: "The region should look like us-central1." };
+  if (!imageId) return { error: "Build the image on Local first. Deploy publishes that id." };
+  const internet = input.exposure !== "internal";
+  const parsed = parseGcpLink({
+    project,
+    region,
+    exposure: input.exposure,
+    minInstances: input.minInstances ?? (internet && input.hasPublicChannel ? 1 : 0),
+    maxInstances: input.maxInstances ?? 4,
+    concurrency: input.concurrency ?? 4,
+    cpu: input.cpu ?? "1",
+    memory: input.memory ?? "1Gi",
+    timeout: input.timeout ?? 300,
+    env: input.env ?? [],
+  });
+  if ("error" in parsed) return parsed;
+  const service = imageName(input.agentName);
+  const tag = imageId.slice("sha256:".length, "sha256:".length + 12);
+  const secrets = [...new Set(input.secretNames.filter((name) => /^[A-Z][A-Z0-9_]*$/.test(name)))];
+  const clash = parsed.link.env.find((row) => secrets.includes(row.name));
+  if (clash) return { error: `${clash.name} is a secret. Create it in Secret Manager. Do not put the value here.` };
+  const cold = internet && input.hasPublicChannel && parsed.link.minInstances === 0
+    ? "A public chat can miss the first webhook while Cloud Run starts. Set min instances to 1 to stay awake."
+    : "";
+  const closed = !internet && input.hasPublicChannel
+    ? "A chat channel needs the public internet. Internal only accepts calls from this GCP project."
+    : "";
+  return {
+    plan: {
+      service,
+      project,
+      region,
+      image: `${region}-docker.pkg.dev/${project}/bigagent/${service}:${tag}`,
+      ingress: internet ? "all" : "internal",
+      allowUnauthenticated: internet,
+      minInstances: parsed.link.minInstances,
+      maxInstances: parsed.link.maxInstances,
+      concurrency: parsed.link.concurrency,
+      cpu: parsed.link.cpu,
+      memory: parsed.link.memory,
+      timeout: parsed.link.timeout,
+      secrets,
+      env: parsed.link.env,
+      warning: closed || cold,
+    },
+  };
+}
+
+export function pickGcloud(whereOutput: string): string {
+  return whereOutput.split(/\r?\n/).map((line) => line.trim()).find((line) => path.isAbsolute(line) && /gcloud\.cmd$/i.test(line)) || "";
+}
+
+export function windowsShell(command: string, args: string[], logFile: string): string {
+  const quote = (value: string) => `"${value.replace(/"/g, '""')}"`;
+  return `"${[quote(command), ...args.map(quote)].join(" ")} > ${quote(logFile)} 2>&1"`;
+}
+
+export function readCommandLog(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString("utf16le").replace(/^\uFEFF/, "");
+  if (bytes.length >= 4 && bytes[1] === 0 && bytes[3] === 0) return bytes.toString("utf16le");
+  return bytes.toString("utf8");
+}
+
+export function commandFailure(text: string): string {
+  const lines = text.replace(/\r/g, "\n").split("\n").map((line) => line.trim()).filter(Boolean);
+  const useful = lines.filter((line) => !line.startsWith("$ ") && !/^[0-9a-f]{12}: /.test(line) && !/^exit \d+$/.test(line) && !/^The push refers/.test(line) && !/^The command printed nothing/.test(line));
+  const error = [...useful].reverse().find((line) => /error|denied|not found|invalid|permission|failed|forbidden|python|gcloud\.py/i.test(line));
+  return (error || useful.at(-1) || "").slice(0, 500);
+}
+
+export type LogEntry = {
+  timestamp?: string;
+  textPayload?: string;
+  httpRequest?: { status?: number; requestUrl?: string; latency?: string };
+};
+
+export function parseLogEntries(raw: string): LogEntry[] {
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  if (start < 0 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((row) => {
+      if (!row || typeof row !== "object") return [];
+      const entry = row as LogEntry;
+      return [{
+        timestamp: typeof entry.timestamp === "string" ? entry.timestamp : "",
+        textPayload: typeof entry.textPayload === "string" ? entry.textPayload : "",
+        httpRequest: entry.httpRequest && typeof entry.httpRequest === "object"
+          ? {
+              status: typeof entry.httpRequest.status === "number" ? entry.httpRequest.status : undefined,
+              requestUrl: typeof entry.httpRequest.requestUrl === "string" ? entry.httpRequest.requestUrl : "",
+              latency: typeof entry.httpRequest.latency === "string" ? entry.httpRequest.latency : "",
+            }
+          : undefined,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function latencyMs(value?: string): number {
+  const match = String(value || "").match(/([\d.]+)\s*(ms|s)?/i);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return 0;
+  return /ms/i.test(match[2] || "") ? amount : amount * 1000;
+}
+
+function stamp(value?: string): number {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export type MonitorFacts = {
+  calls: number;
+  accepted: number;
+  rejected: number;
+  interrupted: number;
+  prepMs: number;
+  acceptMedianMs: number;
+  acceptP95Ms: number;
+  acceptSlowMs: number;
+  replyMedianMs: number;
+  replySlowMs: number;
+  modelMedianMs: number;
+};
+
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor((sorted.length - 1) / 2)];
+}
+
+function percentile(values: number[], ratio: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(ratio * sorted.length) - 1));
+  return sorted[index];
+}
+
+function prepIn(text: string): number[] {
+  return (text.match(/(?:durationMs|totalMs):\s*(\d+)/g) || []).map((item) => Number(item.replace(/\D/g, ""))).filter((value) => value > 0);
+}
+
+export function monitorFacts(entries: LogEntry[]): MonitorFacts {
+  const hooks = entries.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
+  const accepted = hooks.filter((entry) => (entry.httpRequest?.status ?? 0) > 0 && (entry.httpRequest?.status ?? 0) < 400);
+  const times = accepted.map((entry) => latencyMs(entry.httpRequest?.latency)).sort((left, right) => left - right);
+  const interrupts = entries
+    .filter((entry) => /turn interrupted/i.test(entry.textPayload || ""))
+    .map((entry) => stamp(entry.timestamp))
+    .filter((value) => value > 0)
+    .sort((left, right) => left - right);
+  let interrupted = 0;
+  let previous = 0;
+  for (const value of interrupts) {
+    if (value - previous > 3000) interrupted += 1;
+    previous = value;
+  }
+  const sorted = [...entries].sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
+  const notes = sorted.flatMap((entry) => entry.textPayload ? [{ at: stamp(entry.timestamp), text: entry.textPayload }] : []);
+  const orderedHooks = sorted.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
+  const replies: number[] = [];
+  const models: number[] = [];
+  orderedHooks.forEach((hook, index, rows) => {
+    const start = stamp(hook.timestamp);
+    const end = stamp(rows[index + 1]?.timestamp) || Number.POSITIVE_INFINITY;
+    const between = notes.filter((item) => item.at >= start && item.at < end);
+    const reply = between.map((item) => item.text.match(/replied in (\d+)ms/i)).find(Boolean);
+    const prep = between.flatMap((item) => prepIn(item.text));
+    const rules = prep.length ? Math.max(...prep) : 0;
+    if (reply) {
+      const waited = Number(reply[1]);
+      replies.push(waited);
+      if (rules > 0 && waited >= rules) models.push(waited - rules);
+    }
+  });
+  const loosePrep = notes.flatMap((item) => prepIn(item.text));
+  return {
+    calls: hooks.length,
+    accepted: accepted.length,
+    rejected: hooks.length - accepted.length,
+    interrupted,
+    prepMs: loosePrep.length ? Math.max(...loosePrep) : 0,
+    acceptMedianMs: times.length ? median(times) : 0,
+    acceptP95Ms: percentile(times, 0.95),
+    acceptSlowMs: times.length ? times[times.length - 1] : 0,
+    replyMedianMs: median(replies),
+    replySlowMs: replies.length ? Math.max(...replies) : 0,
+    modelMedianMs: median(models),
+  };
+}
+
+export function monitorFilter(service: string, region: string): string {
+  return `resource.type="cloud_run_revision" AND resource.labels.service_name="${service}" AND resource.labels.location="${region}" AND (httpRequest.requestUrl:"/v1/channels/" OR textPayload:"replied in" OR textPayload:"durationMs" OR textPayload:"totalMs" OR textPayload:"turn failed" OR textPayload:"turn started")`;
+}
+
+export function channelBars(entries: LogEntry[]): { ms: number; ok: boolean; label: string; kind: "accept" }[] {
+  const sorted = [...entries].sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
+  const hooks = sorted.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
+  return hooks.slice(-24).map((entry) => ({
+    ms: latencyMs(entry.httpRequest?.latency),
+    ok: (entry.httpRequest?.status ?? 0) > 0 && (entry.httpRequest?.status ?? 0) < 400,
+    label: (entry.timestamp || "").slice(11, 19),
+    kind: "accept" as const,
+  }));
+}
+
+export function agentSignal(entries: LogEntry[]): { headline: string; webhook: string; turn: string; advice: string; kind: "ok" | "error" } {
+  const sorted = [...entries].sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
+  const texts = sorted.flatMap((entry) => entry.textPayload ? [{ at: entry.timestamp || "", text: entry.textPayload }] : []);
+  const hooks = sorted.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
+  const lastHook = hooks.at(-1);
+  if (texts.some((row) => /Permission denied on secret/i.test(row.text)) && !lastHook) {
+    return {
+      headline: "The revision is not ready. It cannot read a secret.",
+      webhook: "No channel call in this window.",
+      turn: "No turn.",
+      advice: "Grant Secret Accessor, then deploy again.",
+      kind: "error",
+    };
+  }
+  if (!lastHook) {
+    return {
+      headline: "No channel call in this window.",
+      webhook: "No webhook.",
+      turn: "No turn.",
+      advice: "Send one message, then update again.",
+      kind: "ok",
+    };
+  }
+  const status = lastHook.httpRequest?.status ?? 0;
+  const when = (lastHook.timestamp || "").slice(0, 19);
+  const webhook = `Last webhook ${status} at ${when}.`;
+  if (status === 401 || status === 403) {
+    return {
+      headline: "The channel rejected the call.",
+      webhook,
+      turn: "No turn.",
+      advice: "The channel secret does not match. Fix it in Secrets, then register the webhook again.",
+      kind: "error",
+    };
+  }
+  const hookAt = lastHook.timestamp || "";
+  const after = texts.filter((row) => row.at >= hookAt);
+  if (after.some((row) => /sendMessage failed/i.test(row.text))) {
+    return {
+      headline: "The reply did not reach the chat.",
+      webhook,
+      turn: "The chat rejected the reply.",
+      advice: "The turn finished and the send failed. Read the log below.",
+      kind: "error",
+    };
+  }
+  const failed = [...after].reverse().find((row) => /turn failed:/i.test(row.text));
+  if (failed && /interrupted/i.test(failed.text)) {
+    return {
+      headline: "The reply was not sent. A later message cancelled the turn.",
+      webhook,
+      turn: "Turn interrupted.",
+      advice: "Send one message and wait. This is not a CPU or memory change.",
+      kind: "error",
+    };
+  }
+  if (failed) {
+    return {
+      headline: "The turn failed before a reply.",
+      webhook,
+      turn: "Turn failed.",
+      advice: "Read the log below. It must not contain a secret value.",
+      kind: "error",
+    };
+  }
+  const facts = monitorFacts(entries);
+  const prep = facts.prepMs ? `Loading rules took up to ${Math.round(facts.prepMs / 1000)}s.` : "No cancelled turn in this window.";
+  if (facts.interrupted > 0) {
+    return {
+      headline: facts.interrupted === 1 ? "1 turn was cancelled before a reply." : `${facts.interrupted} turns were cancelled before a reply.`,
+      webhook,
+      turn: prep,
+      advice: "The other calls were accepted. The chart is webhook time, not the wait in the chat. Send one message and wait.",
+      kind: "error",
+    };
+  }
+  if (!texts.some((row) => /replied in \d+ms/i.test(row.text))) {
+    return {
+      headline: "The agent is answering. These numbers are how fast the webhook was accepted.",
+      webhook,
+      turn: prep,
+      advice: "A reply is not a failed call. The person waits while rules load and the model answers. A second message cancels that turn.",
+      kind: "ok",
+    };
+  }
+  return {
+    headline: "The last call was accepted. No failed turn in this window.",
+    webhook,
+    turn: "No failed turn after that call.",
+    advice: "If the chat is still empty, update again in a minute. The turn may still be running.",
+    kind: "ok",
+  };
+}
+
+export function cloudRunRuntimeAccount(projectNumber: string): string {
+  return /^\d+$/.test(projectNumber) ? `${projectNumber}-compute@developer.gserviceaccount.com` : "";
+}
+
+export function secretAccessorArgs(project: string, secret: string, account: string): string[] {
+  return [
+    "secrets", "add-iam-policy-binding", secret,
+    "--project", project,
+    "--member", `serviceAccount:${account}`,
+    "--role", "roles/secretmanager.secretAccessor",
+    "--quiet",
+  ];
+}
+
+export function cloudRunArgs(plan: CloudRunPlan): string[] {
+  const args = [
+    "run", "deploy", plan.service,
+    "--project", plan.project,
+    "--region", plan.region,
+    "--image", plan.image,
+    "--ingress", plan.ingress,
+    "--port", "3000",
+    "--min-instances", String(plan.minInstances),
+    "--max-instances", String(plan.maxInstances),
+    "--update-annotations", `run.googleapis.com/minScale=${plan.minInstances},run.googleapis.com/maxScale=${plan.maxInstances}`,
+    "--concurrency", String(plan.concurrency),
+    "--cpu", plan.cpu,
+    "--memory", plan.memory,
+    "--timeout", String(plan.timeout),
+    plan.allowUnauthenticated ? "--allow-unauthenticated" : "--no-allow-unauthenticated",
+  ];
+  if (plan.secrets.length) args.push("--set-secrets", plan.secrets.map((name) => `${name}=${name}:latest`).join(","));
+  if (plan.env.length) args.push("--set-env-vars", plan.env.map((row) => `${row.name}=${row.value}`).join(","));
+  return args;
+}
+
+export function portHolder(log: string, owners: string): string {
+  if (!/port is already allocated|address already in use/i.test(log)) return "";
+  const name = owners.split(/\n/).map((line) => line.trim()).find((line) => /:3000->/.test(line))?.split(/\s+/)[0];
+  return name
+    ? `Port 3000 is already used by ${name}. Stop that container, then Start again.`
+    : "Port 3000 is already used on this machine. Stop the other agent, then Start again.";
+}
+
+export function shipArgs(task: "start" | "rebuild", hasPin: boolean, republish: boolean): string[] {
+  if (task === "rebuild" || !hasPin) return ["compose", "up", "--build", "-d", "--force-recreate"];
+  return republish ? ["compose", "up", "-d", "--force-recreate"] : ["compose", "up", "-d"];
+}
+
 export function writeDocker(root: string, force = true): void {
   const write = (file: string, body: string) => {
     if (force || !fs.existsSync(file)) fs.writeFileSync(file, body, "utf8");
   };
+  const name = isProject(root) ? imageName(loadProject(root).name) : "bigagent-agent";
   write(path.join(root, ".dockerignore"), ".env\n.env.*\n!.env.example\n.git\nnode_modules\n");
   write(path.join(root, "Dockerfile"), dockerFile());
-  write(path.join(root, "compose.yaml"), composeFile());
+  write(path.join(root, "compose.yaml"), composeFile(name, readImagePin(root) || ""));
   if (isProject(root)) ensurePackageJson(root, loadProject(root).name);
 }
 
@@ -1278,9 +2227,9 @@ function telegramChannel(item: Item, model: boolean): string {
     `// ${MARK}`,
     "type TelegramUpdate = { message?: { text?: string; chat?: { id?: number } } };",
     "",
-    "export default defineChannel<{ chatId: string }>({",
+    "export default defineChannel<{ chatId: string; startedAt: string }>({",
     "  auth: [publicEndpoint()],",
-    '  state: { chatId: "" },',
+    '  state: { chatId: "", startedAt: "" },',
     "  routes: [",
     `    POST(${q(route)}, {`,
     `      description: ${q(item.body || "A Telegram message")},`,
@@ -1290,13 +2239,14 @@ function telegramChannel(item: Item, model: boolean): string {
     "        const update = body as TelegramUpdate;",
     "        const text = update.message?.text?.trim();",
     "        const chatId = update.message?.chat?.id;",
-    '        if (!text || typeof chatId !== "number") return new Response(null, { status: 200 });',
+        '        if (!text || typeof chatId !== "number") return new Response(null, { status: 200 });',
+    '        console.log("[telegram] turn started");',
     model
       ? "        waitUntil(send(text, {"
       : `        const reply = ${directReply(item.body)};`,
     model ? "          continuationToken: `telegram:${chatId}`," : "        waitUntil(replyTelegram(String(chatId), String(reply).slice(0, 4000)));",
     ...(model
-      ? ["          state: { chatId: String(chatId) },", "          title: `Telegram ${chatId}`,", "        }));"]
+      ? ["          state: { chatId: String(chatId), startedAt: String(Date.now()) },", "          title: `Telegram ${chatId}`,", "        }));"]
       : []),
     "        return new Response(null, { status: 200 });",
     "      },",
@@ -1309,6 +2259,8 @@ function telegramChannel(item: Item, model: boolean): string {
     "    },",
     '    async "message.completed"(event, channel) {',
     '      if (event.data.finishReason === "tool_call" || !event.data.text) return;',
+    "      const waited = Math.max(0, Date.now() - Number(channel.state.startedAt || Date.now()));",
+    "      console.log(`[telegram] replied in ${waited}ms`);",
     "      await replyTelegram(channel.state.chatId, event.data.text);",
     "    },",
     "  },",
@@ -1483,10 +2435,12 @@ export function emitSdk(root: string): void {
     project.egress.length || project.secrets.length
       ? `  hosting: { secretNames: ${JSON.stringify(project.secrets.map((row) => row.name))}, egressDomains: ${JSON.stringify(project.egress)} },\n`
       : "";
+  const narrow = `  local: { cwd: "/srv/agent/bot" },\n`;
   write(
     "bot/agent.ts",
-    `import { defineAgent } from "@grok/agent-sdk";\n\n// ${MARK}\nexport default defineAgent({\n  name: ${q(project.name)},\n${model}${harness}${turns}${reminders}${hosting}});\n`,
+    `import { defineAgent } from "@grok/agent-sdk";\n\n// ${MARK}\nexport default defineAgent({\n  name: ${q(project.name)},\n${narrow}${model}${harness}${turns}${reminders}${hosting}});\n`,
   );
+  write(".cursorignore", "node_modules\n.git\nout\ndist\n");
   write("bot/instructions.md", `<!-- ${MARK} -->\n${project.instructions.endsWith("\n") ? project.instructions : `${project.instructions}\n`}`);
   const wired = flowLinks(project, readLayout(root));
   let telegram = false;
@@ -1813,10 +2767,11 @@ export function writeLayout(root: string, layout: Layout): void {
   });
 }
 
-function composeFile(): string {
+function composeFile(name: string, pin: string): string {
+  const source = pin ? `image: ${name}@${pin}` : `build: .\n    image: ${name}`;
   return `services:
   agent:
-    build: .
+    ${source}
     ports:
       - "127.0.0.1:3000:3000"
     environment:
@@ -1836,6 +2791,79 @@ export type EvalSuite = { file: string; cases: string[] };
 
 export type Studio = { evals: EvalSuite[]; files: StudioFile[] };
 
+export function mergeLogs(previous: string, snapshot: string): string {
+  if (!snapshot.trim()) return previous;
+  return snapshot.slice(-8000);
+}
+
+export function consoleCommand(command: string, args: string[], platform = process.platform): string {
+  const bin = command === "gcloud" && platform === "win32" ? "gcloud.cmd" : command;
+  return formatCommand(bin, args);
+}
+
+export function pushProgress(log: string): { done: number; pending: number; detail: string } {
+  const layers = new Map<string, string>();
+  for (const line of log.split("\n")) {
+    const match = line.match(/^([0-9a-f]{12}):\s*(.*)$/);
+    if (match) layers.set(match[1], match[2].trim() || "Preparing");
+  }
+  let done = 0;
+  const pending: string[] = [];
+  for (const [id, status] of layers) {
+    if (/already exists|pushed|mounted/i.test(status)) done += 1;
+    else pending.push(`${id}: ${status}`);
+  }
+  return { done, pending: pending.length, detail: pending.slice(0, 2).join(", ") };
+}
+
+export function consoleAppend(previous: string, chunk: string): string {
+  const layer = (line: string) => line.match(/^([0-9a-f]{12}): /)?.[1] || "";
+  let open = previous.endsWith("\r");
+  let text = open ? previous.slice(0, -1) : previous;
+  const pieces = chunk.split("\r");
+  pieces.forEach((piece, pieceIndex) => {
+    let replace = open || pieceIndex > 0;
+    if (piece.length === 0) return;
+    piece.split("\n").forEach((line, lineIndex) => {
+      const rows = text.length ? text.split("\n") : [];
+      if (lineIndex === 0 && replace) {
+        const current = rows[rows.length - 1] || "";
+        const nextId = layer(line);
+        const currentId = layer(current);
+        if (rows.length === 0) rows.push(line);
+        else if (nextId && currentId && nextId !== currentId) rows.push(line);
+        else if (/^\$ /.test(current) || /\b(error|denied|forbidden)\b/i.test(current)) rows.push(line);
+        else rows[rows.length - 1] = line;
+      } else if (line.length || lineIndex > 0) {
+        rows.push(line);
+      }
+      text = rows.join("\n");
+      replace = false;
+    });
+    open = pieceIndex < pieces.length - 1;
+  });
+  const lines = text.split("\n");
+  const last = new Map<string, number>();
+  lines.forEach((line, index) => {
+    const id = layer(line);
+    if (id) last.set(id, index);
+  });
+  const folded = lines.filter((line, index) => {
+    const id = layer(line);
+    if (id) return last.get(id) === index;
+    return line.trim().length > 0 || index === lines.length - 1;
+  }).join("\n");
+  return folded + (open ? "\r" : "");
+}
+
+export function formatCommand(command: string, args: string[]): string {
+  const shown = [command, ...args].map((part) => {
+    if (part === "") return '""';
+    return /[\s"$`\\]/.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part;
+  });
+  return `$ ${shown.join(" ")}`;
+}
+
 export function scrubLogs(text: string, names: string[]): string {
   let out = text;
   for (const name of names) {
@@ -1843,6 +2871,13 @@ export function scrubLogs(text: string, names: string[]): string {
     out = out.replace(new RegExp(`${name}=\\S+`, "g"), `${name}=•••`);
   }
   return out.replace(/\d{6,}:[A-Za-z0-9_-]{20,}/g, "•••");
+}
+
+export function redactValues(text: string, values: string[]): string {
+  let out = text;
+  const secrets = [...values].filter((value) => value.trim().length >= 4).sort((left, right) => right.length - left.length);
+  for (const value of secrets) out = out.split(value).join("•••");
+  return scrubLogs(out, []);
 }
 
 export function composePortClosed(text: string): boolean {
@@ -1882,6 +2917,16 @@ export function logLevel(line: string): "error" | "warn" | "info" {
   if (/\b(error|failed|failure|exception|panic)\b/i.test(line)) return "error";
   if (/\bwarn(?:ing)?\b/i.test(line)) return "warn";
   return "info";
+}
+
+export function runSignals(logs: string): { errors: number; lastError: string; spanMs: number | null } {
+  const lines = logs.split(/\n/).map((line) => line.trim()).filter(Boolean);
+  const errors = lines.filter((line) => logLevel(line) === "error");
+  const stamps = lines.map((line) => logStamp(line)).filter((time): time is number => time != null);
+  const spanMs = stamps.length >= 2 ? Math.max(...stamps) - Math.min(...stamps) : null;
+  const last = errors.length ? errors[errors.length - 1] : "";
+  const lastError = last.replace(/^\d{4}-\d{2}-\d{2}T\S+\s*/, "").slice(0, 180);
+  return { errors: errors.length, lastError, spanMs };
 }
 
 export function logStamp(line: string): number | null {

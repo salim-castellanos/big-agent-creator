@@ -1,6 +1,6 @@
 # Línea base — BigAgentCreator
 
-Lo que la carpeta hace en la fuente **0.2.26**. No es una HU ni una spec. El cambio nuevo abre las suyas antes de `apps/`.
+Lo que la carpeta hace en la fuente **0.2.29**. Para modificar este repo, un agente abre primero `docs/plataforma.md`. No es una HU ni una spec. El cambio nuevo abre las suyas antes de `apps/`.
 
 El git publicado es `https://github.com/salim-castellanos/big-agent-creator`. `origin/main` es el corte de la tienda. El trabajo posterior está en el árbol de trabajo y no en ese commit. `STATUS.md` conserva el relato de versiones. Si discrepa con este archivo, manda este.
 
@@ -48,7 +48,7 @@ Al inicializar entran Agent y Limits. Un disparador cuya flecha no llega a Agent
 
 `@grok/agent-sdk` `^0.6.0`. El generador escribe `package.json` con `"type": "module"`, esa dependencia y `zod`. Los archivos generados importan `zod/v4`. El Dockerfile hace `npm install` y arranca `agent-sdk serve --mode single`. La ruta pública de un canal es `POST /v1/channels/<nombre>/`.
 
-No se escribe `local: { sandbox: true }`. Esta imagen no ejecuta el sandbox. Si `bot/agent.ts` lo tiene igual, `deliveryCheck` lo nombra y **Start** queda apagado. Si falta `"type": "module"`, el `npm install` o el modo single, Start también queda apagado.
+No se escribe `local: { sandbox: true }`. Esta imagen no ejecuta el sandbox. Sí se escribe `local: { cwd: "/srv/agent/bot" }` y un `.cursorignore` con `node_modules`. Sin eso, cada turno en Cloud Run recorre `node_modules` buscando reglas y tarda unos 18 s antes de contestar. Si `bot/agent.ts` lo tiene igual, `deliveryCheck` lo nombra y **Start** queda apagado. Si falta `"type": "module"`, el `npm install` o el modo single, Start también queda apagado.
 
 Un aviso de OpenTelemetry dentro del SDK no se parchea aquí. El SDK 0.6.0 todavía usa el paquete que avisa.
 
@@ -72,7 +72,7 @@ Docker no es loopback dentro del contenedor. El Compose local pone `BIGAGENT_ADM
 | Conectar | Telegram: túnel y webhook. WhatsApp: comprobar el número y enviar `hello`. Slack: comprobar el token del bot. GitHub, GitLab y Bitbucket: en la tarjeta del disparador se escribe el repositorio (`owner/name`, `group/project` o `workspace/repo`) y, al guardar, los secretos aparecen en Secretos y en Conectar. |
 | Inicializar | Carpeta en blanco, o **Inicializar con** Hello, Telegram desk, Support desk o Change gate. La primera vez la carpeta queda en `.keep/original`. |
 | Lienzo | Una tarjeta incompleta se pone en rojo. El cursor dice para qué sirve y qué falta. En propiedades, el campo vacío queda en rojo. **Simular flujo** separa secretos, tarjetas y carpeta. Hello, Telegram desk y Support desk solo deben secretos. Change gate debe secretos y el repositorio `owner/name`. |
-| Preguntar | Un botón abre el chat. **Probar comunicación** llama al modelo del editor. Si no hay modelo, el chat sigue apagado. Si contesta, se puede preguntar por este lienzo. El chat no escribe tarjetas. |
+| Preguntar | Un botón abre el chat. **Probar comunicación** llama al modelo del editor. Si no hay modelo, el chat sigue apagado. Si contesta, se puede preguntar por este lienzo. Un cambio propuesto se guarda solo con **Aplicar**. |
 | Desplegar | **Start**, **Rebuild**, **Stop**. Si Docker no está instalado, la barra dice **Falta Docker** y pide instalarlo y dejarlo en marcha. Si el motor no responde, dice que Docker Desktop no está en marcha. El nombre del agente y el estado (en marcha, falló, detenido) quedan en la barra. CPU, memoria y la latencia del playground son la misma fila que usará un despliegue en nube. El log llena el resto del panel, con su propio scroll, búsqueda, tipo y fechas. Kubernetes, AWS, GCP y Azure se nombran. No despliegan. |
 | Ejemplos | Hello, Telegram desk, Support desk, Change gate. **Cargar** reemplaza el lienzo. La primera vez guarda la carpeta en `.keep/original` y no vuelve a pisar esa copia. `.env` no se reemplaza. **Restaurar mi carpeta** devuelve esa copia y borra lo que el ejemplo agregó. |
 

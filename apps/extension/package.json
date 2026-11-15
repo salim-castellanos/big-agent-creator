@@ -2,7 +2,7 @@
   "name": "bigagentcreator",
   "displayName": "BigAgentCreator",
   "description": "Design an AI agent workflow on a canvas and save it as a folder. Triggers, tools, and Telegram. Manage environments and deploy the same image with Docker locally, or straight to AWS, GCP, and Azure. Skip the agent and the path answers in code.",
-  "version": "0.2.26",
+  "version": "0.2.76",
   "publisher": "BigAgentCreator",
   "repository": {
     "type": "git",
@@ -65,10 +65,13 @@
     "sync-examples": "node scripts/sync-examples.mjs",
     "compile": "node scripts/sync-examples.mjs && esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "vscode:prepublish": "npm run compile",
-    "test": "tsx --test src/project.test.ts"
+    "test": "tsx --test src/project.test.ts",
+    "live:telegram": "tsx scripts/live-telegram.ts",
+    "test:ui": "playwright test"
   },
   "devDependencies": {
     "@grok/agent-sdk": "^0.6.0",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^22.14.0",
     "@types/vscode": "1.95.0",
     "esbuild": "0.25.0",

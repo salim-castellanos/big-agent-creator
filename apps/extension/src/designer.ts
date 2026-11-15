@@ -1,5 +1,5 @@
 import { exampleText, phrase, studioText, t, type CopyKey, type Lang } from "./copy";
-import { cardNeeds, CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, flowReport, GUIDE_URL, GUIDE_URL_ES, hookSecretReach, LIBRARY_KINDS, review, slackReach, telegramReach, TRIGGER_TYPES, whatsappReach, type CardNeed, type Item, type Kind, type Layout, type Project, type Scan, type Studio } from "./project";
+import { cardNeeds, CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, flowReport, defaultGcpLink, GCP_CPUS, GCP_MEMORY, gcpChecks, gcpPreview, GUIDE_URL, readImagePin, GUIDE_URL_ES, hasPublicChannel, hookSecretReach, LIBRARY_KINDS, proposalLabel, publicChannelUrl, readGcpLink, review, runSignals, slackReach, telegramReach, TRIGGER_TYPES, whatsappReach, type CardNeed, type Item, type Kind, type Layout, type Project, type Proposal, type Scan, type Studio } from "./project";
 
 export type ShipStats = { cpu: string; memory: string; healthMs: number | null };
 
@@ -10,11 +10,77 @@ export type ShipStatus = {
   phase: "idle" | "building" | "stopping" | "checking" | "rebuilding" | "tunnel" | "webhook";
   summary: string;
   logs: string;
+  channelLogs?: Record<string, string>;
   publicUrl: string;
   stats?: ShipStats;
   dockerWhy?: "missing" | "down";
   republish?: boolean;
+  image?: string;
 };
+
+export type ShipFace = {
+  state: "busy" | "down" | "failed" | "running" | "stopped";
+  label: string;
+  summary: string;
+  summaryKind: "working" | "error" | "plain";
+  cpu: string;
+  memory: string;
+  health: string;
+  errors: string;
+  window: string;
+  lastError: string;
+  ariaBusy: boolean;
+  startDisabled: boolean;
+  startText: string;
+  playgroundDisabled: boolean;
+  rebuildDisabled: boolean;
+  stopDisabled: boolean;
+  refreshDisabled: boolean;
+  playgroundLine: string;
+  image: string;
+};
+
+export function shipFace(local: ShipStatus, lang: Lang, startBlocked: boolean): ShipFace {
+  const busy = local.phase !== "idle";
+  const acting = local.phase === "building" || local.phase === "rebuilding" || local.phase === "stopping";
+  const state = busy ? "busy" : local.docker === "down" ? "down" : local.failed ? "failed" : local.running ? "running" : "stopped";
+  const label =
+    local.phase === "building" ? t(lang, "building")
+    : local.phase === "rebuilding" ? t(lang, "rebuilding")
+    : local.phase === "stopping" ? t(lang, "stopping")
+    : local.phase === "checking" ? t(lang, "checking")
+    : local.phase === "tunnel" ? t(lang, "opening_tunnel")
+    : local.phase === "webhook" ? t(lang, "registering")
+    : local.docker === "down" && local.dockerWhy === "missing" ? t(lang, "docker_missing")
+    : local.docker === "down" ? t(lang, "docker_off")
+    : local.failed ? t(lang, "failed")
+    : local.running ? t(lang, "running")
+    : t(lang, "stopped");
+  const meters = local.stats ?? { cpu: "—", memory: "—", healthMs: null as number | null };
+  const signals = runSignals(local.logs);
+  const span = signals.spanMs == null ? "—" : signals.spanMs < 1000 ? `${signals.spanMs} ms` : `${Math.round(signals.spanMs / 1000)} s`;
+  return {
+    state,
+    label,
+    summary: phrase(lang, local.summary),
+    summaryKind: busy ? "working" : state === "failed" || state === "down" ? "error" : "plain",
+    cpu: meters.cpu,
+    memory: meters.memory,
+    health: meters.healthMs == null ? "—" : `${meters.healthMs} ms`,
+    errors: String(signals.errors),
+    window: span,
+    lastError: signals.lastError ? phrase(lang, signals.lastError) : "—",
+    ariaBusy: busy,
+    startDisabled: acting || local.running || startBlocked,
+    startText: acting || local.running ? label : t(lang, "start"),
+    playgroundDisabled: !(local.running && !acting),
+    rebuildDisabled: acting || startBlocked,
+    stopDisabled: !(local.running || acting),
+    refreshDisabled: acting,
+    playgroundLine: local.running ? t(lang, "playground_ready") : t(lang, "playground_after"),
+    image: local.image ? `sha256:${local.image.replace(/^sha256:/, "").slice(0, 12)}` : "",
+  };
+}
 
 export type Ui = {
   mode: "flow" | "prove" | "platform" | "secrets" | "connect" | "deploy" | "examples";
@@ -25,11 +91,15 @@ export type Ui = {
   libraryWidth: number;
   inspectorWidth: number;
   lang?: Lang;
+  shipTarget?: "local" | "gcp" | "aws" | "azure";
+  gcpNote?: string;
+  gcpVerdict?: { text: string; step: "current" | "other" | "unknown"; image: string };
+  gcpTrail?: string[];
   helpOpen?: boolean;
   secretFocus?: string;
   askOpen?: boolean;
-  lm?: { ok: boolean; reason: string };
-  ask?: { role: "you" | "guide"; text: string }[];
+  lm?: { ok: boolean; reason: string; models?: { id: string; name: string }[]; modelId?: string };
+  ask?: { role: "you" | "guide"; text: string; proposal?: Proposal; applied?: boolean }[];
 };
 
 function langOf(ui: { lang?: Lang }): Lang {
@@ -192,19 +262,19 @@ function inspector(project: Project, selected: string, lang: Lang): string {
       <label>${t(lang, "max_turns")}<input id="turns" value="${project.maxRunningTurns ?? ""}" placeholder="${esc(t(lang, "no_cap"))}" /></label>
       <label>${t(lang, "egress")}<textarea id="egress">${esc(project.egress.join("\n"))}</textarea></label>
       <label>${t(lang, "instructions")}<textarea id="instructions">${esc(project.instructions)}</textarea></label>
-      <div class="row"><button type="button" id="save-agent" class="primary">${t(lang, "save")}</button></div>`;
+      <div class="row savebar"><button type="button" id="save-agent" class="primary">${t(lang, "save")}</button></div>`;
   }
   if (selected === "scope") {
     return `<p class="eyebrow">${kindLabel(lang, "limits")}</p><h2>${t(lang, "scope_name")}</h2><p class="path">.bigagent/project.json</p>
       <p class="hint">${t(lang, "limits_hint")}</p>
       <label>${t(lang, "refusal")}<textarea id="scope">${esc(project.scope)}</textarea></label>
-      <div class="row"><button type="button" id="save-scope" class="primary">${t(lang, "save")}</button></div>`;
+      <div class="row savebar"><button type="button" id="save-scope" class="primary">${t(lang, "save")}</button></div>`;
   }
   const [kind, name] = selected.split(":") as [Kind, string];
   const item = project.items.find((entry) => entry.kind === kind && entry.name === name);
   if (!item) return `<p class="hint">${t(lang, "select_node")}</p>`;
   const head = `<p class="eyebrow">${kindLabel(lang, kind)}</p><h2>${esc(item.name)}</h2>`;
-  const foot = `<div class="row"><button type="button" id="save-item" class="primary">${t(lang, "save")}</button><button type="button" id="delete-item">${t(lang, "delete")}</button></div>
+  const foot = `<div class="row savebar"><button type="button" id="save-item" class="primary">${t(lang, "save")}</button><button type="button" id="delete-item">${t(lang, "delete")}</button></div>
     <p class="hint">${t(lang, "delete_hint")}</p>`;
   if (kind === "tool") {
     const effect = item.effect || "read";
@@ -472,11 +542,14 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     : "";
   const local = ship ?? { docker: "unknown" as const, running: false, phase: "idle" as const, summary: "Checking this machine.", logs: "", publicUrl: "" };
   const busy = local.phase !== "idle";
-  const acting = local.phase === "building" || local.phase === "rebuilding" || local.phase === "stopping";
-  const shipState = busy ? "busy" : local.docker === "down" ? "down" : local.failed ? "failed" : local.running ? "running" : "stopped";
-  const localLabel = local.phase === "building" ? t(lang, "building") : local.phase === "rebuilding" ? t(lang, "rebuilding") : local.phase === "stopping" ? t(lang, "stopping") : local.phase === "checking" ? t(lang, "checking") : local.phase === "tunnel" ? t(lang, "opening_tunnel") : local.phase === "webhook" ? t(lang, "registering") : local.docker === "down" && local.dockerWhy === "missing" ? t(lang, "docker_missing") : local.docker === "down" ? t(lang, "docker_off") : local.failed ? t(lang, "failed") : local.running ? t(lang, "running") : t(lang, "stopped");
-  const meters = local.stats ?? { cpu: "—", memory: "—", healthMs: null as number | null };
+  const connectLocked = local.phase === "webhook" || local.phase === "tunnel";
   const delivery = project ? deliveryCheck(project.root) : [];
+  const face = shipFace(local, lang, delivery.length > 0);
+  const summaryInner = face.summaryKind === "working"
+    ? `<div class="working" role="status"><span class="spin" aria-hidden="true"></span><span class="worktext">${esc(face.summary)}</span><span class="bar" aria-hidden="true"></span></div>`
+    : face.summaryKind === "error"
+      ? `<p class="ship-error" role="alert">${esc(face.summary)}</p>`
+      : `<p>${esc(face.summary)}</p>`;
   const telegram = project?.items.some((item) => item.kind === "channel" && item.description === "telegram") ?? false;
   const whatsapp = project?.items.some((item) => item.kind === "channel" && item.description === "whatsapp") ?? false;
   const telegramProblems = project && telegram ? telegramReach(project.root) : [];
@@ -490,33 +563,61 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         ...project.secrets.filter((secret) => !secret.configured && secret.name !== "AGENT_SDK_BEARER_TOKEN").map((secret) => phrase(lang, `${secret.name} is empty. Set it in Secrets.`)),
       ]
     : [];
+  const gcpBase = project ? readGcpLink(project.root) : defaultGcpLink();
+  const gcp = !gcpBase.saved && project && hasPublicChannel(project) && gcpBase.exposure !== "internal" ? { ...gcpBase, minInstances: 1 } : gcpBase;
+  const gcpExposure = gcp.project ? gcp.exposure : project && hasPublicChannel(project) ? "internet" : "internal";
+  const shipTarget = ui.shipTarget === "gcp" || ui.shipTarget === "aws" || ui.shipTarget === "azure" ? ui.shipTarget : "local";
+  const optionList = (options: readonly string[], current: string) => options.map((option) => `<option value="${esc(option)}"${option === current ? " selected" : ""}>${esc(option)}</option>`).join("");
+  const envRows = (gcp.env.length ? gcp.env : [{ name: "", value: "" }]).map((row) => `<div class="row" data-env-row><label>${t(lang, "name")}<input data-env-name value="${esc(row.name)}" placeholder="LOG_LEVEL" autocomplete="off" /></label><label>${t(lang, "value")}<input data-env-value value="${esc(row.value)}" autocomplete="off" /></label></div>`).join("");
+  const secretRows = project?.secrets.length
+    ? project.secrets.map((secret) => `<li class="gcp-secret"><strong>${esc(secret.name)}</strong><span>${secret.configured ? t(lang, "gcp_secret_ready") : t(lang, "gcp_secret_empty")}</span><label>${t(lang, "gcp_secret_for")}<input type="password" data-gcp-secret="${esc(secret.name)}" autocomplete="off" placeholder="${esc(t(lang, "gcp_secret_ph"))}" /></label><button type="button" data-sync-one="${esc(secret.name)}">${t(lang, "gcp_sync_one")}</button></li>`).join("")
+    : `<li class="hint">${t(lang, "gcp_no_secrets")}</li>`;
+  const pin = project ? readImagePin(project.root) : null;
+  const preview = gcpPreview({ agentName: project?.name || "", imageId: pin, project: gcp.project, region: gcp.region, url: gcp.url });
+  const checks = gcpChecks({ imageId: pin, project: gcp.project, region: gcp.region, secrets: project?.secrets.map((secret) => ({ name: secret.name, configured: secret.configured })) || [] });
+  const checkList = checks.map((row) => `<li class="${row.ok ? "ok" : "miss"}">${esc(phrase(lang, row.text))}</li>`).join("");
+  const held = ui.gcpVerdict;
+  const gcpState = held?.step === "current" ? "current" : held?.step === "other" ? "other" : held?.step === "unknown" ? "failed" : preview.state === "published" ? "running" : "stopped";
+  const gcpLabel = held?.step === "current" ? t(lang, "gcp_up_to_date") : held?.step === "other" ? t(lang, "gcp_other_image") : held?.step === "unknown" ? t(lang, "gcp_unknown") : preview.state === "published" ? t(lang, "gcp_published") : preview.state === "need-image" ? t(lang, "gcp_need_image") : t(lang, "gcp_ready");
+  const verdictHtml = `<p id="gcp-verdict" class="verdict ${esc(held?.step || "")}"${held?.text ? "" : " hidden"}>${esc(held?.text || "")}</p>`;
+  const trailHtml = `<ol id="gcp-trail">${(ui.gcpTrail || []).map((line) => `<li>${esc(line)}</li>`).join("")}</ol>`;
+  const gcpTabs = `<div class="gcp-sub" role="tablist"><button type="button" class="on" data-gcp-tab="status" role="tab" aria-selected="true">${t(lang, "gcp_tab_status")}</button><button type="button" data-gcp-tab="place" role="tab" aria-selected="false">${t(lang, "gcp_tab_place")}</button><button type="button" data-gcp-tab="scale" role="tab" aria-selected="false">${t(lang, "gcp_tab_scale")}</button><button type="button" data-gcp-tab="secrets" role="tab" aria-selected="false">${t(lang, "gcp_tab_secrets")}</button><button type="button" data-gcp-tab="env" role="tab" aria-selected="false">${t(lang, "gcp_tab_env")}</button><button type="button" data-gcp-tab="monitor" role="tab" aria-selected="false">${t(lang, "gcp_tab_monitor")}</button></div>`;
+  const gcpCard = `<div class="gcp-pane" data-gcp-pane="status"><div class="localbar" id="gcp-live"><header><span class="statusline" data-state="${gcpState}"><span data-gcp-label>${gcpLabel}</span></span><strong>${esc(project?.name || "")}</strong><span class="where">GCP</span></header>${verdictHtml}<p id="gcp-image" class="path"${preview.image ? "" : " hidden"}>${esc(t(lang, "image_pin"))} ${esc(preview.image)}</p><p id="gcp-service" class="path">${esc(t(lang, "gcp_publishes"))} ${esc(preview.service)}</p><p id="gcp-target" class="path"${preview.target ? "" : " hidden"}>${esc(preview.target)}</p><p id="gcp-summary">${esc(phrase(lang, preview.summary))}</p><ul id="gcp-checks" class="scan">${checkList}</ul><p id="gcp-clock" class="hint" hidden></p><p class="path"><a id="gcp-url" href="${esc(preview.url || "#")}"${preview.url ? "" : " hidden"}>${esc(preview.url)}</a></p><div class="row"><button type="button" id="gcp-build">${t(lang, "gcp_build")}</button><button type="button" id="gcp-deploy" class="primary">${t(lang, "gcp_deploy")}</button><button type="button" id="gcp-check">${t(lang, "gcp_check")}</button><button type="button" id="gcp-refresh">${t(lang, "gcp_live")}</button></div>${trailHtml}</div></div>`;
+  const gcpForm = `<div id="gcp-form"><div class="gcp-pane" data-gcp-pane="place" hidden><label>${t(lang, "gcp_project")}<input id="gcp-project" value="${esc(gcp.project)}" placeholder="my-project" autocomplete="off" /></label><label>${t(lang, "gcp_region")}<input id="gcp-region" value="${esc(gcp.region)}" placeholder="us-central1" autocomplete="off" /></label><fieldset class="exposure"><label><input type="radio" name="gcp-exposure" value="internet"${gcpExposure === "internet" ? " checked" : ""} /> ${t(lang, "gcp_internet")}</label><p class="hint">${t(lang, "gcp_internet_h")}</p><label><input type="radio" name="gcp-exposure" value="internal"${gcpExposure === "internal" ? " checked" : ""} /> ${t(lang, "gcp_internal")}</label><p class="hint">${t(lang, "gcp_internal_h")}</p></fieldset></div><div class="gcp-pane" data-gcp-pane="scale" hidden><div class="scale"><label>${t(lang, "gcp_min")}<input id="gcp-min" type="number" min="0" max="20" step="1" value="${gcp.minInstances}" /></label><label>${t(lang, "gcp_max")}<input id="gcp-max" type="number" min="1" max="100" step="1" value="${gcp.maxInstances}" /></label><label>${t(lang, "gcp_concurrency")}<input id="gcp-concurrency" type="number" min="1" max="80" step="1" value="${gcp.concurrency}" /></label><label>${t(lang, "gcp_cpu")}<select id="gcp-cpu">${optionList(GCP_CPUS, gcp.cpu)}</select></label><label>${t(lang, "gcp_memory")}<select id="gcp-memory">${optionList(GCP_MEMORY, gcp.memory)}</select></label><label>${t(lang, "gcp_timeout")}<input id="gcp-timeout" type="number" min="15" max="3600" step="1" value="${gcp.timeout}" /></label></div><p class="hint">${t(lang, "gcp_scale_h")}</p></div><div class="gcp-pane" data-gcp-pane="secrets" hidden><div class="row"><h3>${t(lang, "gcp_secrets")}</h3><button type="button" id="gcp-sync">${t(lang, "gcp_sync")}</button></div><p class="hint">${t(lang, "gcp_secrets_h")}</p><ul class="secrets">${secretRows}</ul></div><div class="gcp-pane" data-gcp-pane="env" hidden><h3>${t(lang, "gcp_env")}</h3><p class="hint">${t(lang, "gcp_env_h")}</p><div id="gcp-env-list">${envRows}</div><div class="row"><button type="button" id="gcp-env-add">${t(lang, "gcp_env_add")}</button></div></div><div class="gcp-pane mon" data-gcp-pane="monitor" hidden><header class="mon-head"><div><p class="kicker">${t(lang, "gcp_tab_monitor")}</p><strong id="gcp-signal-headline" data-state="stopped">${esc(t(lang, "gcp_signal_empty"))}</strong></div><div class="mon-tools"><label>${t(lang, "gcp_every")}<select id="gcp-every" aria-label="${esc(t(lang, "gcp_every"))}"><option value="0">${t(lang, "gcp_every_off")}</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label><button type="button" id="gcp-logs" class="primary">${t(lang, "gcp_logs")}</button></div></header><div id="gcp-meters"></div><figure class="chart-card"><figcaption>${t(lang, "gcp_chart_title")}</figcaption><div id="gcp-chart" class="chart"></div><p class="legend"><i class="ok"></i>${t(lang, "gcp_accepted")}<i class="miss"></i>${t(lang, "gcp_waiting")}<i class="bad"></i>${t(lang, "gcp_rejected")}</p></figure><div class="mon-read"><p id="gcp-signal-webhook"></p><p id="gcp-signal-turn"></p><p id="gcp-signal-advice"></p></div><p class="hint">${t(lang, "gcp_monitor_h")}</p><p class="path">${gcp.url ? `<a href="${esc(gcp.url)}">${esc(gcp.url)}</a>` : esc(t(lang, "gcp_no_url"))}</p><ul class="scan"><li>${esc(t(lang, "gcp_min"))} ${gcp.minInstances} · ${esc(t(lang, "gcp_max"))} ${gcp.maxInstances}</li><li>${esc(gcp.cpu)} CPU · ${esc(gcp.memory)} · ${gcp.timeout}s</li>${gcp.minInstances === 0 && gcpExposure === "internet" ? `<li class="miss">${esc(t(lang, "gcp_cold"))}</li>` : ""}</ul></div></div>`;
   const deploy = project
-    ? `<div class="sheet fill ship"><p class="kicker">${t(lang, "one_image")}</p><h2>${t(lang, "ship")}</h2><p class="hint">${t(lang, "ship_hint")}</p>
-        <div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span class="statusline" data-state="${shipState}">${busy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(localLabel)}</span></span><strong data-agent>${esc(project.name)}</strong><span class="where">${t(lang, "local")}</span></header>${busy ? `<div class="working" role="status"><span class="spin" aria-hidden="true"></span><span class="worktext">${esc(phrase(lang, local.summary))}</span><span class="bar" aria-hidden="true"></span></div>` : shipState === "failed" || shipState === "down" ? `<p class="ship-error" role="alert">${esc(phrase(lang, local.summary))}</p>` : `<p>${esc(phrase(lang, local.summary))}</p>`}<div class="meters"><span><em>${t(lang, "cpu")}</em>${esc(meters.cpu)}</span><span><em>${t(lang, "memory")}</em>${esc(meters.memory)}</span><span><em>${t(lang, "health")}</em>${meters.healthMs == null ? "—" : `${meters.healthMs} ms`}</span></div><p class="hint">${t(lang, "monitor_hint")}</p><p class="path">${local.running ? t(lang, "playground_ready") : t(lang, "playground_after")} · http://127.0.0.1:3000/playground</p>
-          <div class="row"><button type="button" id="ship-start" class="primary" ${acting || local.running || delivery.length ? "disabled" : ""} title="${esc(phrase(lang, local.summary))}">${acting || local.running ? esc(localLabel) : t(lang, "start")}</button><button type="button" id="open-playground" ${local.running && !acting ? "" : "disabled"}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${acting || delivery.length ? "disabled" : ""} title="${esc(t(lang, "rebuild_hint"))}">${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${local.running || acting ? "" : "disabled"}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${acting ? "disabled" : ""} title="${esc(t(lang, "refresh_does"))}">${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
+    ? `<div class="sheet fill ship">
+        <div class="ship-tabs" role="tablist"><button type="button" class="${shipTarget === "local" ? "on" : ""}" data-target="local" role="tab" aria-selected="${shipTarget === "local"}">${t(lang, "local")}</button><button type="button" class="${shipTarget === "gcp" ? "on" : ""}" data-target="gcp" role="tab" aria-selected="${shipTarget === "gcp"}">GCP</button><button type="button" class="${shipTarget === "aws" ? "on" : ""}" data-target="aws" role="tab" aria-selected="${shipTarget === "aws"}">AWS</button><button type="button" class="${shipTarget === "azure" ? "on" : ""}" data-target="azure" role="tab" aria-selected="${shipTarget === "azure"}">Azure</button></div>
+        <div class="ship-local" data-ship-panel="local"${shipTarget === "local" ? "" : " hidden"}>
+        <div class="localbar" id="ship-live" ${face.ariaBusy ? `aria-busy="true"` : ""}><header><span class="statusline" data-state="${face.state}">${face.ariaBusy ? `<span class="spin" aria-hidden="true"></span>` : ""}<span data-status>${esc(face.label)}</span></span><strong data-agent>${esc(project.name)}</strong><span class="where">${t(lang, "local")}</span></header><p id="ship-image" class="path"${face.image ? "" : " hidden"}>${esc(t(lang, "image_pin"))} ${esc(face.image)}</p><div id="ship-summary">${summaryInner}</div><div class="meters"><span><em>${t(lang, "cpu")}</em><b id="meter-cpu">${esc(face.cpu)}</b></span><span><em>${t(lang, "memory")}</em><b id="meter-memory">${esc(face.memory)}</b></span><span><em>${t(lang, "health")}</em><b id="meter-health">${esc(face.health)}</b></span><span><em>${t(lang, "error_count")}</em><b id="meter-errors">${esc(face.errors)}</b></span><span><em>${t(lang, "window_span")}</em><b id="meter-window">${esc(face.window)}</b></span></div><p class="hint">${t(lang, "monitor_hint")}</p><p id="ship-last-error" class="hint"${face.lastError === "—" ? " hidden" : ""}>${esc(t(lang, "last_error"))}: ${esc(face.lastError)}</p><p class="path" id="ship-path">${esc(face.playgroundLine)} · http://127.0.0.1:3000/playground</p>
+          <div class="row"><button type="button" id="ship-start" class="primary" ${face.startDisabled ? "disabled" : ""} title="${esc(face.summary)}">${esc(face.startText)}</button><button type="button" id="open-playground" ${face.playgroundDisabled ? "disabled" : ""}>${t(lang, "open_playground")}</button><button type="button" id="ship-rebuild" ${face.rebuildDisabled ? "disabled" : ""} title="${esc(t(lang, "rebuild_hint"))}">${t(lang, "rebuild")}</button><button type="button" id="ship-stop" ${face.stopDisabled ? "disabled" : ""}>${t(lang, "stop")}</button><button type="button" id="ship-refresh" ${face.refreshDisabled ? "disabled" : ""} title="${esc(t(lang, "refresh_does"))}">${t(lang, "refresh")}</button><button type="button" id="ship-logs">${t(lang, "follow_logs")}</button></div>
           ${delivery.length ? `<p class="hint">${t(lang, "start_off")}</p>` : ""}
           ${project.secrets.some((secret) => secret.name === "AGENT_SDK_BEARER_TOKEN" && !secret.configured) ? `<div class="bearer-note"><button type="button" class="attention" data-set-secret="AGENT_SDK_BEARER_TOKEN">${t(lang, "set_secret", { name: "AGENT_SDK_BEARER_TOKEN" })}</button><strong>AGENT_SDK_BEARER_TOKEN</strong><p>${t(lang, "bearer_why")}</p></div>` : ""}
         </div>
+        <div class="ship-split"><button type="button" id="fold-status" aria-expanded="true" title="${esc(t(lang, "fold_status_title"))}">${t(lang, "fold_status")}</button><button type="button" id="fold-log" aria-expanded="true" title="${esc(t(lang, "fold_log_title"))}">${t(lang, "fold_log")}</button></div>
         <div class="logwrap">
           <div class="logbar">
             <input id="log-search" type="search" placeholder="${t(lang, "search_logs")}" aria-label="${t(lang, "search_logs")}" />
             <select id="log-level" aria-label="${t(lang, "log_level")}"><option value="all">${t(lang, "all_logs")}</option><option value="error">${t(lang, "errors")}</option><option value="warn">${t(lang, "warnings")}</option><option value="info">${t(lang, "info")}</option></select>
             <input id="log-from" type="datetime-local" aria-label="${t(lang, "log_from")}" />
             <input id="log-to" type="datetime-local" aria-label="${t(lang, "log_to")}" />
+            <button type="button" data-clear-log>${t(lang, "clear_log")}</button>
           </div>
           <script type="application/json" id="log-seed">${JSON.stringify(local.logs.split(/\n/).map((line) => phrase(lang, line)).join("\n")).replace(/</g, "\\u003c")}</script>
           <pre id="ship-log" class="log"></pre>
         </div>
-        <details class="ship-more"><summary>${t(lang, "ship_more")}${problems.length ? ` (${problems.length})` : ""}</summary>
-          <div class="destinations">
-            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>${t(lang, "k8s")}</strong></header><p>${t(lang, "k8s_p")}</p></article>
-            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>AWS</strong></header><p>${t(lang, "aws_p")}</p></article>
-            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>GCP</strong></header><p>${t(lang, "gcp_p")}</p></article>
-            <article class="env"><header><span>${t(lang, "same_image")}</span><strong>Azure</strong></header><p>${t(lang, "azure_p")}</p></article>
-          </div>
-          ${problems.length ? `<ul class="work">${problems.map((problem) => `<li><p>${esc(problem)}</p></li>`).join("")}</ul>` : `<p class="hint">${t(lang, "no_problems")}</p>`}
-        </details>
-        <div class="ship-foot" title="${esc(t(lang, "ship_foot"))}"><button type="button" id="rewrite-docker">${t(lang, "rewrite_docker")}</button><button type="button" id="run-validate">${t(lang, "check_project")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div></div>`
+        ${problems.length ? `<details class="ship-more"><summary>${t(lang, "folder_notes")} (${problems.length})</summary><ul class="work">${problems.map((problem) => `<li><p>${esc(problem)}</p></li>`).join("")}</ul></details>` : ""}
+        <div class="ship-foot" title="${esc(t(lang, "ship_foot"))}"><button type="button" id="rewrite-docker">${t(lang, "rewrite_docker")}</button><button type="button" id="run-validate">${t(lang, "check_project")}</button><button type="button" id="run-evals">${t(lang, "run_evals")}</button></div>
+        </div>
+        <section class="ship-cloud ship-stack" data-ship-panel="gcp"${shipTarget === "gcp" ? "" : " hidden"}>
+          <p id="gcp-status" class="${ui.gcpNote ? "hint" : "hint"}"${ui.gcpNote ? "" : " hidden"}>${esc(ui.gcpNote || "")}</p>
+          ${gcpTabs}
+          <div class="cloud-top" id="gcp-deploy-pane">${gcpCard}${gcpForm}</div>
+          <div class="ship-split"><button type="button" id="fold-gcp-top" aria-expanded="true" title="${esc(t(lang, "fold_deploy_title"))}">${t(lang, "fold_status")}</button><button type="button" id="fold-gcp-bottom" aria-expanded="true" title="${esc(t(lang, "fold_run_title"))}">${t(lang, "fold_log")}</button></div>
+          <div class="cloud-bottom" id="gcp-run-pane"><div class="row"><h3>${t(lang, "gcp_title")}</h3><button type="button" data-clear-log>${t(lang, "clear_log")}</button></div><pre id="gcp-log" class="log"></pre></div>
+        </section>
+        <section class="ship-cloud" data-ship-panel="aws"${shipTarget === "aws" ? "" : " hidden"}><h3>${t(lang, "aws_title")}</h3><p>${t(lang, "aws_body")}</p></section>
+        <section class="ship-cloud" data-ship-panel="azure"${shipTarget === "azure" ? "" : " hidden"}><h3>${t(lang, "azure_title")}</h3><p>${t(lang, "azure_body")}</p></section>
+        </div>`
     : "";
   const otherChannels = project ? project.items.filter((item) => item.kind === "channel" && !["telegram", "whatsapp", "slack", "github", "gitlab", "bitbucket"].includes(item.description || "")) : [];
   const slack = project?.items.some((item) => item.kind === "channel" && item.description === "slack") ?? false;
@@ -527,8 +628,14 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   const githubProblems = project && github ? hookSecretReach(project.root, "github") : [];
   const gitlabProblems = project && gitlab ? hookSecretReach(project.root, "gitlab") : [];
   const bitbucketProblems = project && bitbucket ? hookSecretReach(project.root, "bitbucket") : [];
-  const packCard = (title: string, text: string, problems: { message: string }[], extra = "") =>
-    `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>${title}</strong></header><p>${text}</p>${extra}${problems.length ? `<p class="hint">${esc(phrase(lang, problems[0].message))}</p>` : ""}</div>`;
+  const channelLog = (id: string) => {
+    const text = local.channelLogs?.[id] || "";
+    const last = text.split("\n").map((line) => line.trim()).filter(Boolean).at(-1) || t(lang, "connect_quiet");
+    const state = (id === "telegram" && local.phase === "webhook") || (id === "address" && local.phase === "tunnel") ? "busy" : /refused|did not|could not|empty|rejects/i.test(last) ? "failed" : /registered|answered|will call|Sent /i.test(last) ? "running" : "stopped";
+    return `<p class="statusline" data-state="${state}"><span data-connect-status="${id}">${esc(last)}</span></p><pre class="log connect-log" data-connect-log="${id}">${esc(text || t(lang, "no_log"))}</pre>`;
+  };
+  const packCard = (id: string, title: string, text: string, problems: { message: string }[], extra = "") =>
+    `<div class="localbar" ${connectLocked ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>${title}</strong></header><p>${text}</p>${extra}${problems.length ? `<p class="hint">${esc(phrase(lang, problems[0].message))}</p>` : ""}${channelLog(id)}</div>`;
   const repoBlock = (type: string) => {
     const item = project?.items.find((entry) => entry.kind === "channel" && entry.description === type);
     const need = CHANNEL_NEEDS[type];
@@ -536,15 +643,25 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     const repo = need?.repo ? (item?.repo ? `<p class="path">${esc(item.repo)}</p>` : `<p class="hint">${t(lang, "repo_missing")}</p>`) : "";
     return `${repo}<ul class="secrets">${names}</ul>`;
   };
+  const publicBase = local.publicUrl || (project ? readGcpLink(project.root).url || "" : "");
+  const hookPreview = publicChannelUrl(publicBase) || "";
+  const absent = [
+    ["whatsapp", "WhatsApp"],
+    ["slack", "Slack"],
+    ["github", "GitHub"],
+    ["gitlab", "GitLab"],
+    ["bitbucket", "Bitbucket"],
+  ].filter(([id]) => !(project?.items.some((item) => item.kind === "channel" && item.description === id)));
   const connect = project
     ? `<div class="sheet fill"><p class="kicker">${t(lang, "outside")}</p><h2>${t(lang, "connect")}</h2><p class="hint">${t(lang, "connect_hint")}</p>
-        ${telegram || whatsapp ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>${t(lang, "public_address")}</strong></header><p>${t(lang, "public_shared")}</p><label>${t(lang, "public_address")}<input id="public-url" value="${esc(local.publicUrl)}" placeholder="https://name.trycloudflare.com" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="ship-tunnel" ${busy ? "disabled" : ""}>${t(lang, "open_tunnel")}</button></div></div>` : ""}
-        ${telegram ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>Telegram</strong></header><p>${t(lang, "telegram_setup")}</p><div class="row"><button type="button" id="ship-webhook" class="primary" ${busy || !local.running || telegramProblems.length ? "disabled" : ""}>${t(lang, "register_webhook")}</button></div>${telegramProblems.length ? `<p class="hint">${t(lang, "register_off")}</p>` : ""}</div>` : ""}
-        ${whatsapp ? `<div class="localbar" ${busy ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>WhatsApp</strong></header><p>${t(lang, "whatsapp_setup")}</p><div class="row"><button type="button" id="whatsapp-check" ${busy || whatsappProblems.length ? "disabled" : ""}>${t(lang, "whatsapp_check")}</button></div><label>${t(lang, "whatsapp_to")}<input id="whatsapp-to" placeholder="573001112233" ${busy ? "disabled" : ""} /></label><div class="row"><button type="button" id="whatsapp-send" class="primary" ${busy || whatsappProblems.length ? "disabled" : ""}>${t(lang, "whatsapp_send")}</button></div>${whatsappProblems.length ? `<p class="hint">${t(lang, "whatsapp_off")}</p>` : ""}</div>` : ""}
-        ${slack ? packCard("Slack", t(lang, "slack_setup"), slackProblems, `<div class="row"><button type="button" id="slack-check" ${busy || slackProblems.length ? "disabled" : ""}>${t(lang, "slack_check")}</button></div>`) : ""}
-        ${github ? packCard("GitHub", t(lang, "github_setup"), githubProblems, repoBlock("github")) : ""}
-        ${gitlab ? packCard("GitLab", t(lang, "gitlab_setup"), gitlabProblems, repoBlock("gitlab")) : ""}
-        ${bitbucket ? packCard("Bitbucket", t(lang, "bitbucket_setup"), bitbucketProblems, repoBlock("bitbucket")) : ""}
+        ${telegram || whatsapp ? `<div class="localbar" ${connectLocked ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>${t(lang, "public_address")}</strong></header><p>${t(lang, "public_shared")}</p><label>${t(lang, "public_address")}<input id="public-url" value="${esc(publicBase)}" placeholder="https://service.a.run.app" ${connectLocked ? "disabled" : ""} /></label><p id="hook-preview" class="path">${esc(hookPreview)}</p><div class="row"><button type="button" id="ship-tunnel" ${connectLocked ? "disabled" : ""}>${t(lang, "open_tunnel")}</button></div>${channelLog("address")}</div>` : ""}
+        ${telegram ? `<div class="localbar" ${connectLocked ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>Telegram</strong></header><p>${t(lang, "telegram_setup")}</p><div class="row"><button type="button" id="ship-webhook" class="primary" ${connectLocked || telegramProblems.length ? "disabled" : ""}>${local.phase === "webhook" ? t(lang, "registering") : t(lang, "register_webhook")}</button></div>${telegramProblems.length ? `<p class="hint">${t(lang, "register_off")}</p>` : ""}${channelLog("telegram")}</div>` : ""}
+        ${whatsapp ? `<div class="localbar" ${connectLocked ? `aria-busy="true"` : ""}><header><span>${t(lang, "from_chat")}</span><strong>WhatsApp</strong></header><p>${t(lang, "whatsapp_setup")}</p><div class="row"><button type="button" id="whatsapp-check" ${connectLocked || whatsappProblems.length ? "disabled" : ""}>${t(lang, "whatsapp_check")}</button></div><label>${t(lang, "whatsapp_to")}<input id="whatsapp-to" placeholder="573001112233" ${connectLocked ? "disabled" : ""} /></label><div class="row"><button type="button" id="whatsapp-send" class="primary" ${connectLocked || whatsappProblems.length ? "disabled" : ""}>${t(lang, "whatsapp_send")}</button></div>${whatsappProblems.length ? `<p class="hint">${t(lang, "whatsapp_off")}</p>` : ""}${channelLog("whatsapp")}</div>` : ""}
+        ${slack ? packCard("slack", "Slack", t(lang, "slack_setup"), slackProblems, `<div class="row"><button type="button" id="slack-check" ${connectLocked || slackProblems.length ? "disabled" : ""}>${t(lang, "slack_check")}</button></div>`) : ""}
+        ${github ? packCard("github", "GitHub", t(lang, "github_setup"), githubProblems, repoBlock("github")) : ""}
+        ${gitlab ? packCard("gitlab", "GitLab", t(lang, "gitlab_setup"), gitlabProblems, repoBlock("gitlab")) : ""}
+        ${bitbucket ? packCard("bitbucket", "Bitbucket", t(lang, "bitbucket_setup"), bitbucketProblems, repoBlock("bitbucket")) : ""}
+        ${absent.map(([, title]) => `<article class="env"><header><span>${t(lang, "channel")}</span><strong>${title}</strong></header><p>${esc(t(lang, "channel_absent", { name: title }))}</p></article>`).join("")}
         ${!telegram && !whatsapp && !slack && !github && !gitlab && !bitbucket ? `<p class="hint">${t(lang, "add_channel")}</p>` : ""}
         ${otherChannels.map((item) => `<article class="env"><header><span>${t(lang, "channel")}</span><strong>${esc(item.name)}</strong></header><p>${t(lang, "channel_later")}</p></article>`).join("")}
         ${telegramProblems.length ? `<ul class="work">${telegramProblems.map((finding) => `<li><p>${esc(phrase(lang, finding.message))}</p></li>`).join("")}</ul>` : ""}
@@ -630,7 +747,11 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .railhead { display: flex; align-items: center; gap: 8px; padding: 10px 10px 4px 12px; }
       .rail.right .railhead h2 { margin-right: auto; }
       .rail.left .railhead h2 { margin-right: auto; }
-      .railbody { overflow: auto; padding: 4px 12px 20px; }
+      .railbody { flex: 1; min-height: 0; overflow: auto; padding: 4px 12px 8px; }
+      .railbody .savebar { position: sticky; bottom: 0; z-index: 2; margin: 12px -12px 0; padding: 10px 12px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); }
+      .savebar .primary:active { transform: translateY(1px); }
+      .savebar .primary.hit { transform: scale(.98); }
+      .savebar .primary.done { background: #16a34a; color: #fff; }
       .sash { position: absolute; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; }
       .rail.left .sash { right: -3px; }
       .rail.right .sash { left: -3px; }
@@ -713,7 +834,8 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .ask textarea { min-height: 72px; }
       #ask-log { overflow: auto; margin-top: 8px; }
       #ask-log p { margin: 6px 0; font-size: 13px; }
-      .askbtn { display: inline-flex; align-items: center; gap: 6px; }
+      .assistant { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font-weight: 600; }
+      .assistant.on { outline: 2px solid var(--vscode-focusBorder); }
       .node .k { display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; opacity: .6; }
       .node strong, .node em { display: block; }
       .node em { font-style: normal; opacity: .72; font-size: 12px; margin-top: 4px; }
@@ -766,6 +888,70 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .env code { display: block; margin-top: 10px; font-size: 12px; }
       pre.log { max-height: 320px; overflow: auto; margin: 16px 0; padding: 12px; border-radius: 8px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.12)); font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
       .sheet.fill.ship { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 12px 16px 8px; }
+      .ship-tabs { display: flex; flex: none; gap: 6px; margin: 8px 0 4px; }
+      .ship-tabs button.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+      .ship-local { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+      .ship-local[hidden] { display: none; }
+      .ship-cloud { flex: 1; min-height: 0; overflow: auto; padding: 8px 4px 24px; }
+      .ship-cloud.ship-stack { display: flex; flex-direction: column; overflow: hidden; padding: 4px 4px 8px; }
+      .cloud-top { flex: 1; max-height: none; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+      .cloud-bottom { flex: none; height: 22%; min-height: 72px; display: flex; flex-direction: column; }
+      .gcp-sub { position: sticky; top: 0; z-index: 2; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+      .gcp-pane { flex: 1; min-height: 0; }
+      .chart { min-height: 180px; margin: 0; }
+      .chart svg { display: block; width: 100%; }
+      .mon { display: flex; flex-direction: column; gap: 12px; }
+      .mon-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; }
+      .mon-head .kicker { margin: 0 0 4px; }
+      .mon-head strong { display: block; font-size: 16px; line-height: 1.35; max-width: 52ch; color: var(--vscode-foreground); }
+      .mon-head strong[data-state]::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 99px; background: #8d93a3; vertical-align: 1px; }
+      .mon-head strong[data-state="running"]::before { background: #22C55E; }
+      .mon-head strong[data-state="failed"]::before { background: #F04438; }
+      .mon-head strong[data-state="busy"]::before { background: #F5B942; }
+      .mon-tools { display: flex; gap: 8px; align-items: flex-end; flex: none; }
+      .mon-tools label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
+      .mon-tools select { text-transform: none; letter-spacing: 0; font-size: 13px; opacity: 1; }
+      .kpis { display: grid; gap: 8px; }
+      .kpis.primary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .kpis.secondary { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 8px; }
+      .kpis.secondary strong { font-size: 16px; }
+      .kpis article { padding: 10px 12px; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent); }
+      .kpis span { display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; opacity: .6; }
+      .kpis strong { display: block; margin-top: 4px; font-size: 22px; font-variant-numeric: tabular-nums; }
+      .kpis article.bad strong { color: #F04438; }
+      .kpis article.wait strong { color: #F5B942; }
+      .chart-card { margin: 0; padding: 12px 12px 8px; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); border-radius: 12px; background: color-mix(in srgb, var(--vscode-foreground) 3%, transparent); }
+      .chart-card figcaption { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; opacity: .65; margin-bottom: 6px; }
+      .legend { display: flex; gap: 14px; align-items: center; margin: 6px 0 0; font-size: 12px; opacity: .75; }
+      .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+      .legend i.ok { background: #22C55E; }
+      .legend i.prep { background: #F5B942; }
+      .legend i.accept { background: #38BDF8; }
+      .legend i.miss { background: #F5B942; }
+      .legend i.bad { background: #F04438; }
+      .mon-read p { margin: 0 0 4px; font-size: 13px; line-height: 1.4; }
+      .cloud-bottom pre.log { flex: 1; max-height: none; min-height: 0; margin: 8px 0 0; }
+      .ship-stack.fold-top .cloud-top { display: none; }
+      .ship-stack.fold-top .cloud-bottom { flex: 1; height: auto; min-height: 0; }
+      .ship-stack.fold-bottom .cloud-bottom { display: none; }
+      .ship-stack.fold-bottom .cloud-top { flex: 1; max-height: none; }
+      .ship-cloud[hidden] { display: none; }
+      .ship-cloud h3 { margin: 8px 0; font-size: 16px; letter-spacing: 0; text-transform: none; opacity: 1; }
+      .ship-cloud p { max-width: 62ch; line-height: 1.5; }
+      .gcp-actions { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; padding: 8px 0 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+      .scale { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 12px; margin-top: 8px; }
+      .gcp-sub { display: flex; flex: none; flex-wrap: wrap; gap: 4px; margin: 8px 0 4px; }
+      .gcp-sub button.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+      .gcp-pane[hidden] { display: none; }
+      .exposure { border: 0; margin: 14px 0 0; padding: 0; }
+      .exposure label { font-size: 14px; }
+      .ship-split { flex: none; display: flex; justify-content: center; gap: 8px; }
+      .ship-split button { font-size: 12px; padding: 2px 12px; }
+      .ship-local.fold-status .localbar,
+      .ship-local.fold-status .ship-more,
+      .ship-local.fold-status .ship-foot { display: none; }
+      .ship-local.fold-log .logwrap { display: none; }
+      .ship-local.fold-log .localbar { flex: 1; min-height: 0; overflow: auto; }
       .sheet.ship .localbar { flex: none; margin: 8px 0 10px; }
       .sheet.ship .logwrap { flex: 1; min-height: 180px; }
       .ship-more { flex: none; margin: 6px 0 0; }
@@ -775,17 +961,34 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .logbar { display: flex; gap: 8px; flex-wrap: wrap; }
       .logbar input, .logbar select { flex: 1; min-width: 120px; }
       .sheet.ship pre.log { flex: 1; max-height: none; min-height: 0; margin: 8px 0 0; }
-      .meters { display: flex; gap: 16px; margin: 8px 0; font-size: 12px; }
+      .meters { display: flex; flex-wrap: wrap; gap: 12px 16px; margin: 8px 0; font-size: 12px; }
+      .meters b { font-weight: 600; }
       .meters em { font-style: normal; opacity: .6; margin-right: 6px; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
       .localbar header strong { font-size: 16px; }
+      .localbar pre.connect-log { max-height: 140px; margin: 8px 0 0; }
       .bearer-note { margin: 12px 0 0; padding: 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, #c47a2a 55%, transparent); border-left: 3px solid #c47a2a; background: color-mix(in srgb, #c47a2a 10%, transparent); }
       .bearer-note strong { display: block; margin: 10px 0 4px; }
       .bearer-note p { margin: 0; font-size: 13px; line-height: 1.45; }
       button.attention { display: inline-block; background: #c47a2a; color: #1a1208; font-weight: 650; }
       .localbar header .statusline[data-state="running"] { color: #3f9d68; opacity: 1; }
+      .localbar header .statusline[data-state="current"] { color: #22C55E; opacity: 1; }
+      .localbar header .statusline[data-state="other"] { color: #F5B942; opacity: 1; }
       .localbar header .statusline[data-state="failed"] { color: #d66b6b; opacity: 1; }
+      #gcp-status.same { color: #22C55E; opacity: 1; font-weight: 650; }
+      #gcp-status.other { color: #F5B942; opacity: 1; font-weight: 650; }
+      .verdict { margin: 8px 0; padding: 10px 12px; border-radius: 8px; font-weight: 650; line-height: 1.4; }
+      .verdict.current { color: #052e16; background: #22C55E; }
+      .verdict.other { color: #1a1208; background: #F5B942; }
+      .verdict.unknown { color: #fff; background: #F04438; }
+      #gcp-trail { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; line-height: 1.4; }
+      #gcp-trail li { padding: 2px 0; opacity: .8; }
+      #gcp-trail li:last-child { opacity: 1; }
       ul.secrets { list-style: none; padding: 0; margin: 16px 0; }
       ul.secrets li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.28)); }
+      ul.secrets li.gcp-secret { flex-wrap: wrap; align-items: center; }
+      ul.secrets li.gcp-secret label { flex: 1 1 220px; margin: 0; }
+      ul.secrets li.gcp-secret input { width: 100%; }
+      ul.secrets li.gcp-secret button { flex: none; }
       ul.work { list-style: none; padding: 0; margin: 18px 0; }
       ul.work li { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,.28)); }
       ul.work p { margin: 4px 0 0; }
@@ -799,20 +1002,47 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       <header class="bar">
         <strong>${project ? esc(project.name) : "BigAgentCreator"}</strong>
         ${hasFolder ? `<div class="modes">${project ? `<button type="button" data-mode="flow" class="${ui.mode === "flow" ? "on" : ""}">${t(lang, "design")}</button><button type="button" data-mode="prove" class="${ui.mode === "prove" ? "on" : ""}">${t(lang, "prove")}</button><button type="button" data-mode="platform" class="${ui.mode === "platform" ? "on" : ""}">${t(lang, "platform")}</button><button type="button" data-mode="secrets" class="${ui.mode === "secrets" ? "on" : ""}">${t(lang, "secrets")}</button><button type="button" data-mode="connect" class="${ui.mode === "connect" ? "on" : ""}">${t(lang, "connect")}</button><button type="button" data-mode="deploy" class="${ui.mode === "deploy" ? "on" : ""}">${t(lang, "ship")}</button>` : ""}<button type="button" data-mode="examples" class="${ui.mode === "examples" ? "on" : ""}">${t(lang, "examples")}</button></div>` : ""}
-        <div class="bar-end">${project ? `<button type="button" id="ask-open" class="askbtn" title="${esc(t(lang, "ask_title"))}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="6" r="3.2" fill="none" stroke="currentColor"/><path d="M4.2 13.2c.6-2 1.8-3 3.8-3s3.2 1 3.8 3" fill="none" stroke="currentColor" stroke-linecap="round"/><circle cx="6.7" cy="5.7" r=".5" fill="currentColor"/><circle cx="9.3" cy="5.7" r=".5" fill="currentColor"/></svg> ${t(lang, "ask")}</button>` : ""}${langSwitch(lang)}<button type="button" id="help-open" class="helpbtn">${t(lang, "help")}</button></div>
+        <div class="bar-end">${project ? `<button type="button" id="ask-open" class="assistant" title="${esc(t(lang, "ask_title"))}"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="7.2" r="3.4" fill="currentColor"/><path d="M5.2 19.2c.8-3.4 3.2-5.2 6.8-5.2s6 1.8 6.8 5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10.6" cy="6.8" r=".6" fill="var(--vscode-button-background)"/><circle cx="13.4" cy="6.8" r=".6" fill="var(--vscode-button-background)"/></svg> ${t(lang, "ask")}</button>` : ""}${langSwitch(lang)}<button type="button" id="help-open" class="helpbtn">${t(lang, "help")}</button></div>
       </header>
       ${ui.notice ? `<p class="banner">${esc(ui.notice)}</p>` : ""}${repair}
-      <main>${body}</main>${help}
-      ${project ? `<aside id="ask" class="ask"${ui.askOpen ? "" : " hidden"}><header><strong>${t(lang, "ask_title")}</strong><button type="button" id="ask-close">${t(lang, "close")}</button></header><p class="hint">${esc(phrase(lang, ui.lm?.reason || "Test the editor model before asking."))}</p><div class="row"><button type="button" id="lm-test">${t(lang, "lm_test")}</button></div><div id="ask-log">${(ui.ask || []).map((line) => `<p class="${line.role}"><strong>${line.role === "you" ? t(lang, "ask_you") : t(lang, "ask")}</strong> ${esc(line.text)}</p>`).join("")}</div><form id="ask-form"><textarea id="ask-text" ${ui.lm?.ok ? "" : "disabled"} placeholder="${esc(t(lang, "ask_ph"))}"></textarea><div class="row"><button type="submit" class="primary" ${ui.lm?.ok ? "" : "disabled"}>${t(lang, "ask_send")}</button></div></form></aside>` : ""}`,
+      <main>${body}</main>${help}`,
     `const vscode = acquireVsCodeApi();
     const state = ${data};
     const uiText = ${JSON.stringify({
       saved: t(lang, "saved"),
+      save: t(lang, "save"),
+      saving: t(lang, "saving"),
       copied: t(lang, "copied"),
       noLog: t(lang, "no_log"),
       clickFirst: t(lang, "click_first"),
       clickNext: t(lang, "click_next"),
       building: t(lang, "building"),
+      gcpDeploy: t(lang, "gcp_deploy"),
+      publishing: t(lang, "gcp_publishing"),
+      uploading: t(lang, "gcp_uploading"),
+      workingOn: t(lang, "gcp_working"),
+      upToDate: t(lang, "gcp_up_to_date"),
+      otherImage: t(lang, "gcp_other_image"),
+      unknownImage: t(lang, "gcp_unknown"),
+      refreshIn: t(lang, "gcp_refresh_in"),
+      updating: t(lang, "gcp_updating"),
+      reading: t(lang, "gcp_reading"),
+      noCalls: t(lang, "gcp_no_calls"),
+      chartReply: t(lang, "gcp_chart_title"),
+      chartAccept: t(lang, "gcp_chart_accept"),
+      latency: t(lang, "gcp_latency"),
+      p95: t(lang, "gcp_p95"),
+      errors: t(lang, "gcp_errors"),
+      turnTime: t(lang, "gcp_turn"),
+      prep: t(lang, "gcp_prep"),
+      noReply: t(lang, "gcp_no_reply"),
+      accepted: t(lang, "gcp_accepted"),
+      cut: t(lang, "gcp_cut"),
+      load: t(lang, "gcp_load"),
+      calls: t(lang, "gcp_calls"),
+      rejected: t(lang, "gcp_rejected"),
+      slowest: t(lang, "gcp_slowest"),
+      median: t(lang, "gcp_median"),
       rebuilding: t(lang, "rebuilding"),
       stopping: t(lang, "stopping"),
       checking: t(lang, "checking"),
@@ -823,6 +1053,18 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       required: t(lang, "required"),
       phMeans: t(lang, "ph_means"),
       remove: t(lang, "remove"),
+      lastError: t(lang, "last_error"),
+      hideStatus: t(lang, "fold_status"),
+      showStatus: t(lang, "show_status"),
+      hideLog: t(lang, "fold_log"),
+      showLog: t(lang, "show_log"),
+      hideStatusTitle: t(lang, "fold_status_title"),
+      hideLogTitle: t(lang, "fold_log_title"),
+      showDeploy: t(lang, "show_deploy"),
+      showRun: t(lang, "show_run"),
+      hideDeployTitle: t(lang, "fold_deploy_title"),
+      hideRunTitle: t(lang, "fold_run_title"),
+      imagePin: t(lang, "image_pin"),
     }).replace(/</g, "\\u003c")};
     for (const button of document.querySelectorAll("[data-init-example]")) {
       button.addEventListener("click", () => vscode.postMessage({ type: "create-example", id: button.dataset.initExample }));
@@ -835,9 +1077,13 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     if (secretName && secretName.value && secretValue) secretValue.focus();
     document.getElementById("simulate-flow")?.addEventListener("click", () => { const box = document.getElementById("flow-sim"); if (box) box.hidden = false; });
     document.getElementById("flow-sim-close")?.addEventListener("click", () => { const box = document.getElementById("flow-sim"); if (box) box.hidden = true; });
-    document.getElementById("ask-open")?.addEventListener("click", () => vscode.postMessage({ type: "ask-open" }));
-    document.getElementById("ask-close")?.addEventListener("click", () => vscode.postMessage({ type: "ask-open" }));
-    document.getElementById("lm-test")?.addEventListener("click", () => vscode.postMessage({ type: "lm-test" }));
+    document.getElementById("ask-open")?.addEventListener("click", () => vscode.postMessage({ type: "open-chat" }));
+    for (const button of document.querySelectorAll("[data-apply]")) {
+      button.addEventListener("click", () => vscode.postMessage({ type: "apply-proposal", index: Number(button.dataset.apply) }));
+    }
+    for (const button of document.querySelectorAll("[data-dismiss]")) {
+      button.addEventListener("click", () => vscode.postMessage({ type: "dismiss-proposal", index: Number(button.dataset.dismiss) }));
+    }
     document.getElementById("ask-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
       const text = document.getElementById("ask-text")?.value || "";
@@ -865,6 +1111,237 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     document.getElementById("ship-stop")?.addEventListener("click", () => { arm(uiText.stopping); vscode.postMessage({ type: "ship", task: "stop" }); });
     document.getElementById("ship-refresh")?.addEventListener("click", () => { arm(uiText.checking); vscode.postMessage({ type: "ship", task: "refresh" }); });
     document.getElementById("ship-logs")?.addEventListener("click", () => vscode.postMessage({ type: "ship", task: "follow" }));
+    for (const button of document.querySelectorAll("[data-clear-log]")) {
+      button.addEventListener("click", () => {
+        logLines = [];
+        paintLogs();
+        vscode.postMessage({ type: "ship", task: "clear-log" });
+      });
+    }
+    const shipLocal = document.querySelector(".ship-local");
+    const foldStatus = document.getElementById("fold-status");
+    const foldLog = document.getElementById("fold-log");
+    const paintFold = () => {
+      if (!shipLocal || !foldStatus || !foldLog) return;
+      const statusHidden = shipLocal.classList.contains("fold-status");
+      const logHidden = shipLocal.classList.contains("fold-log");
+      foldStatus.textContent = statusHidden ? uiText.showStatus : uiText.hideStatus;
+      foldStatus.title = statusHidden ? uiText.showStatus : uiText.hideStatusTitle;
+      foldStatus.setAttribute("aria-expanded", statusHidden ? "false" : "true");
+      foldLog.textContent = logHidden ? uiText.showLog : uiText.hideLog;
+      foldLog.title = logHidden ? uiText.showLog : uiText.hideLogTitle;
+      foldLog.setAttribute("aria-expanded", logHidden ? "false" : "true");
+    };
+    foldStatus?.addEventListener("click", () => {
+      if (!shipLocal) return;
+      if (shipLocal.classList.contains("fold-status")) shipLocal.classList.remove("fold-status");
+      else { shipLocal.classList.add("fold-status"); shipLocal.classList.remove("fold-log"); }
+      paintFold();
+    });
+    foldLog?.addEventListener("click", () => {
+      if (!shipLocal) return;
+      if (shipLocal.classList.contains("fold-log")) shipLocal.classList.remove("fold-log");
+      else { shipLocal.classList.add("fold-log"); shipLocal.classList.remove("fold-status"); }
+      paintFold();
+    });
+    const gcpStack = document.querySelector(".ship-stack");
+    const foldGcpTop = document.getElementById("fold-gcp-top");
+    const foldGcpBottom = document.getElementById("fold-gcp-bottom");
+    const paintGcpFold = () => {
+      if (!gcpStack || !foldGcpTop || !foldGcpBottom) return;
+      const topHidden = gcpStack.classList.contains("fold-top");
+      const bottomHidden = gcpStack.classList.contains("fold-bottom");
+      foldGcpTop.textContent = topHidden ? uiText.showDeploy : uiText.hideStatus;
+      foldGcpTop.title = topHidden ? uiText.showDeploy : uiText.hideDeployTitle;
+      foldGcpTop.setAttribute("aria-expanded", topHidden ? "false" : "true");
+      foldGcpBottom.textContent = bottomHidden ? uiText.showRun : uiText.hideLog;
+      foldGcpBottom.title = bottomHidden ? uiText.showRun : uiText.hideRunTitle;
+      foldGcpBottom.setAttribute("aria-expanded", bottomHidden ? "false" : "true");
+    };
+    foldGcpTop?.addEventListener("click", () => {
+      if (!gcpStack) return;
+      if (gcpStack.classList.contains("fold-top")) gcpStack.classList.remove("fold-top");
+      else { gcpStack.classList.add("fold-top"); gcpStack.classList.remove("fold-bottom"); }
+      paintGcpFold();
+    });
+    foldGcpBottom?.addEventListener("click", () => {
+      if (!gcpStack) return;
+      if (gcpStack.classList.contains("fold-bottom")) gcpStack.classList.remove("fold-bottom");
+      else { gcpStack.classList.add("fold-bottom"); gcpStack.classList.remove("fold-top"); }
+      paintGcpFold();
+    });
+    for (const tab of document.querySelectorAll("[data-gcp-tab]")) {
+      tab.addEventListener("click", () => {
+        const id = tab.dataset.gcpTab;
+        for (const button of document.querySelectorAll("[data-gcp-tab]")) {
+          const on = button.dataset.gcpTab === id;
+          button.classList.toggle("on", on);
+          button.setAttribute("aria-selected", on ? "true" : "false");
+        }
+        for (const pane of document.querySelectorAll("[data-gcp-pane]")) pane.hidden = pane.dataset.gcpPane !== id;
+        if (id === "monitor") { armWatch(); pullMonitor(false); }
+        else if (gcpWatch) { clearInterval(gcpWatch); gcpWatch = null; }
+      });
+    }
+    for (const tab of document.querySelectorAll("[data-target]")) {
+      tab.addEventListener("click", () => {
+        const id = tab.dataset.target;
+        for (const button of document.querySelectorAll("[data-target]")) {
+          const on = button.dataset.target === id;
+          button.classList.toggle("on", on);
+          button.setAttribute("aria-selected", on ? "true" : "false");
+        }
+        for (const panel of document.querySelectorAll("[data-ship-panel]")) panel.hidden = panel.dataset.shipPanel !== id;
+        vscode.postMessage({ type: "ship-target", target: id });
+      });
+    }
+    const gcpNumber = (id, fallback) => {
+      const raw = document.getElementById(id)?.value;
+      const number = Number(raw);
+      return Number.isFinite(number) ? number : fallback;
+    };
+    const gcpFields = () => {
+      const env = [];
+      for (const row of document.querySelectorAll("[data-env-row]")) {
+        const name = row.querySelector("[data-env-name]")?.value?.trim() || "";
+        const value = row.querySelector("[data-env-value]")?.value ?? "";
+        if (name || value) env.push({ name, value });
+      }
+      const secretOverrides = [];
+      for (const input of document.querySelectorAll("[data-gcp-secret]")) {
+        secretOverrides.push({ name: input.dataset.gcpSecret || "", value: input.value || "" });
+      }
+      return {
+        project: document.getElementById("gcp-project")?.value || "",
+        region: document.getElementById("gcp-region")?.value || "",
+        exposure: document.querySelector("input[name='gcp-exposure']:checked")?.value || "internet",
+        minInstances: gcpNumber("gcp-min", 0),
+        maxInstances: gcpNumber("gcp-max", 4),
+        concurrency: gcpNumber("gcp-concurrency", 4),
+        cpu: document.getElementById("gcp-cpu")?.value || "1",
+        memory: document.getElementById("gcp-memory")?.value || "1Gi",
+        timeout: gcpNumber("gcp-timeout", 300),
+        env,
+        secretOverrides,
+      };
+    };
+    let gcpWatch = null;
+    let gcpWatchBusy = false;
+    const pullMonitor = (manual) => {
+      const pane = document.querySelector('[data-gcp-pane="monitor"]');
+      if (!pane || pane.hidden || gcpWatchBusy) return;
+      gcpWatchBusy = true;
+      const line = document.getElementById("gcp-signal-headline");
+      if (manual && line) { line.dataset.state = "busy"; line.textContent = uiText.reading; }
+      vscode.postMessage({ type: "gcp-logs", ...gcpFields() });
+    };
+    const armWatch = () => {
+      if (gcpWatch) clearInterval(gcpWatch);
+      gcpWatch = null;
+      const every = Number(document.getElementById("gcp-every")?.value || 0);
+      const pane = document.querySelector('[data-gcp-pane="monitor"]');
+      if (every >= 15 && pane && !pane.hidden) gcpWatch = setInterval(() => pullMonitor(false), every * 1000);
+    };
+    document.getElementById("gcp-every")?.addEventListener("change", () => { armWatch(); pullMonitor(true); });
+    document.getElementById("gcp-logs")?.addEventListener("click", () => pullMonitor(true));
+    document.getElementById("gcp-env-add")?.addEventListener("click", () => {
+      const list = document.getElementById("gcp-env-list");
+      const sample = list?.querySelector("[data-env-row]");
+      if (!list || !sample) return;
+      const row = sample.cloneNode(true);
+      for (const input of row.querySelectorAll("input")) input.value = "";
+      list.append(row);
+    });
+    const gcpStatus = document.getElementById("gcp-status");
+    const showGcpStatus = (text, kind, step) => {
+      if (!gcpStatus) return;
+      gcpStatus.hidden = !text;
+      gcpStatus.textContent = text || "";
+      gcpStatus.className = kind === "error" ? "ship-error" : kind === "working" ? "working" : step === "current" ? "hint same" : step === "other" ? "hint other" : "hint";
+    };
+    let gcpClock = null;
+    let gcpLeft = 10;
+    const paintClock = () => {
+      const el = document.getElementById("gcp-clock");
+      if (!el) return;
+      el.hidden = false;
+      el.textContent = gcpLeft <= 0 ? uiText.updating : uiText.refreshIn.replace("{n}", String(gcpLeft));
+    };
+    const stopClock = () => {
+      if (gcpClock) clearInterval(gcpClock);
+      gcpClock = null;
+      const el = document.getElementById("gcp-clock");
+      if (el) el.hidden = true;
+    };
+    const startClock = () => {
+      if (gcpClock) clearInterval(gcpClock);
+      gcpLeft = 10;
+      paintClock();
+      gcpClock = setInterval(() => {
+        gcpLeft = Math.max(0, gcpLeft - 1);
+        paintClock();
+      }, 1000);
+    };
+    const paintVerdict = (text, step) => {
+      const box = document.getElementById("gcp-verdict");
+      if (!box || !text) return;
+      box.hidden = false;
+      box.className = "verdict " + step;
+      box.textContent = text;
+    };
+    const armGcp = (text, kind, step) => {
+      showGcpStatus(text, kind, step);
+      if (kind === "working") startClock();
+      else stopClock();
+      const lasting = step === "current" || step === "other" || step === "unknown";
+      if (lasting) paintVerdict(text, step);
+      const held = document.getElementById("gcp-verdict");
+      const pinned = Boolean(held && !held.hidden);
+      const summary = document.getElementById("gcp-summary");
+      if (summary && text && (lasting || !pinned)) summary.textContent = text;
+      const line = document.querySelector("#gcp-live .statusline");
+      const label = line?.querySelector("[data-gcp-label]");
+      if (lasting && line) line.dataset.state = step === "current" ? "current" : step === "other" ? "other" : "failed";
+      else if (!pinned && line) line.dataset.state = kind === "error" ? "failed" : kind === "working" ? "busy" : "running";
+      if (lasting && label) label.textContent = step === "current" ? uiText.upToDate : step === "other" ? uiText.otherImage : uiText.unknownImage;
+      else if (!pinned && label && text) label.textContent = text;
+      const busy = kind === "working";
+      const deploy = document.getElementById("gcp-deploy");
+      if (deploy) {
+        deploy.disabled = busy;
+        deploy.textContent = !busy ? uiText.gcpDeploy : step === "push" ? uiText.uploading : step === "publish" ? uiText.publishing : uiText.workingOn;
+      }
+      const build = document.getElementById("gcp-build");
+      if (build) build.disabled = busy;
+      const refresh = document.getElementById("gcp-refresh");
+      if (refresh) refresh.disabled = busy;
+    };
+    document.getElementById("gcp-check")?.addEventListener("click", () => {
+      armGcp(uiText.checking, "working");
+      vscode.postMessage({ type: "gcp-check", ...gcpFields() });
+    });
+    document.getElementById("gcp-refresh")?.addEventListener("click", () => {
+      armGcp(uiText.checking, "working", "working");
+      vscode.postMessage({ type: "gcp-live", ...gcpFields() });
+    });
+    document.getElementById("gcp-sync")?.addEventListener("click", () => {
+      showGcpStatus("", "");
+      vscode.postMessage({ type: "gcp-sync", ...gcpFields() });
+    });
+    document.getElementById("gcp-form")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-sync-one]");
+      if (!button) return;
+      showGcpStatus("", "");
+      vscode.postMessage({ type: "gcp-sync", ...gcpFields(), only: button.dataset.syncOne || "" });
+    });
+    document.getElementById("gcp-build")?.addEventListener("click", () => {
+      armGcp(uiText.building, "working");
+      vscode.postMessage({ type: "gcp-build" });
+    });
+    document.getElementById("gcp-deploy")?.addEventListener("click", () => {
+      armGcp(uiText.workingOn, "working", "working");
+      vscode.postMessage({ type: "gcp-deploy", ...gcpFields() });
+    });
     document.getElementById("open-playground")?.addEventListener("click", () => vscode.postMessage({ type: "ship", task: "playground" }));
     for (const button of document.querySelectorAll("[data-example]")) {
       button.addEventListener("click", () => vscode.postMessage({ type: "load-example", id: button.dataset.example }));
@@ -884,6 +1361,21 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     document.getElementById("keep-folder")?.addEventListener("click", () => vscode.postMessage({ type: "keep-folder" }));
     document.getElementById("restore-folder")?.addEventListener("click", () => vscode.postMessage({ type: "restore-folder" }));
     document.getElementById("ship-tunnel")?.addEventListener("click", () => { arm(uiText.opening); vscode.postMessage({ type: "ship", task: "tunnel" }); });
+    const publicUrl = document.getElementById("public-url");
+    const hookPreview = document.getElementById("hook-preview");
+    const showHook = () => {
+      if (!publicUrl || !hookPreview) return;
+      const raw = publicUrl.value.trim();
+      let next = "";
+      try {
+        const url = new URL(raw);
+        const path = url.pathname.replace(/\\/+$/, "");
+        if (url.protocol === "https:" && url.hostname && (path === "" || path === "/v1/channels/telegram")) next = url.origin + "/v1/channels/telegram/";
+      } catch (e) { next = ""; }
+      hookPreview.textContent = next;
+    };
+    publicUrl?.addEventListener("input", showHook);
+    showHook();
     document.getElementById("ship-webhook")?.addEventListener("click", () => { arm(uiText.registering); vscode.postMessage({ type: "ship", task: "webhook", url: document.getElementById("public-url")?.value || "" }); });
     document.getElementById("whatsapp-check")?.addEventListener("click", () => { arm(uiText.checking); vscode.postMessage({ type: "ship", task: "whatsapp-check" }); });
     document.getElementById("whatsapp-send")?.addEventListener("click", () => { arm(uiText.sending); vscode.postMessage({ type: "ship", task: "whatsapp-send", phone: document.getElementById("whatsapp-to")?.value || "" }); });
@@ -923,6 +1415,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       });
     }
     document.getElementById("save-agent")?.addEventListener("click", () => {
+      armSave(document.getElementById("save-agent"));
       const limit = document.getElementById("limit-tools")?.checked;
       const harness = limit ? [...document.querySelectorAll(".harness")].filter((box) => box.checked).map((box) => box.value) : null;
       const turns = document.getElementById("turns")?.value.trim();
@@ -939,7 +1432,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         egress: (document.getElementById("egress")?.value || "").split(/\\n+/).map((line) => line.trim()).filter(Boolean),
       });
     });
-    document.getElementById("save-scope")?.addEventListener("click", () => vscode.postMessage({ type: "scope", text: document.getElementById("scope").value }));
+    document.getElementById("save-scope")?.addEventListener("click", () => { armSave(document.getElementById("save-scope")); vscode.postMessage({ type: "scope", text: document.getElementById("scope").value }); });
     document.getElementById("add-param")?.addEventListener("click", () => {
       const box = document.getElementById("params");
       if (!box) return;
@@ -974,6 +1467,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       button.addEventListener("click", () => { const input = document.getElementById("route-cron"); if (input) input.value = button.dataset.cron; });
     }
     document.getElementById("save-item")?.addEventListener("click", () => {
+      armSave(document.getElementById("save-item"));
       const parameters = [...document.querySelectorAll("#params .param")].map((row) => ({
         name: row.querySelector("[name=pname]")?.value || "",
         type: row.querySelector("[name=ptype]")?.value || "string",
@@ -1223,11 +1717,25 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     function markSaved() {
       const el = document.getElementById("saved");
       const label = document.getElementById("saved-label");
-      if (!el) return;
-      if (label) label.textContent = uiText.saved;
-      el.classList.remove("flash");
-      void el.offsetWidth;
-      el.classList.add("flash");
+      if (el) {
+        if (label) label.textContent = uiText.saved;
+        el.classList.remove("flash");
+        void el.offsetWidth;
+        el.classList.add("flash");
+      }
+      const bar = document.querySelector(".savebar .primary");
+      if (!bar) return;
+      bar.classList.add("done");
+      bar.textContent = uiText.saved;
+      setTimeout(() => {
+        bar.classList.remove("done");
+        bar.textContent = uiText.save;
+      }, 1600);
+    }
+    function armSave(button) {
+      if (!button) return;
+      button.classList.add("hit");
+      button.textContent = uiText.saving;
     }
     let logLines = [];
     function logRank(line) {
@@ -1237,7 +1745,6 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     }
     function paintLogs() {
       const pre = document.getElementById("ship-log");
-      if (!pre) return;
       const query = (document.getElementById("log-search")?.value || "").toLowerCase();
       const level = document.getElementById("log-level")?.value || "all";
       const fromValue = document.getElementById("log-from")?.value || "";
@@ -1253,13 +1760,95 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         if (stamp && !Number.isNaN(to) && Date.parse(stamp) > to) return false;
         return true;
       });
-      pre.textContent = shown.join("\\n") || uiText.noLog;
+      if (pre) pre.textContent = shown.join("\\n") || uiText.noLog;
+      const cloud = document.getElementById("gcp-log");
+      if (cloud) {
+        const all = logLines.filter((line) => String(line).trim());
+        cloud.textContent = all.join("\\n") || uiText.noLog;
+      }
     }
     const logSeed = document.getElementById("log-seed");
     if (logSeed) {
       try { logLines = String(JSON.parse(logSeed.textContent || '""')).split(/\\n/); } catch (e) { logLines = []; }
       for (const id of ["log-search", "log-level", "log-from", "log-to"]) document.getElementById(id)?.addEventListener("input", paintLogs);
       paintLogs();
+    }
+    function applyFace(face) {
+      const live = document.getElementById("ship-live");
+      if (!live || !face) return;
+      if (face.ariaBusy) live.setAttribute("aria-busy", "true");
+      else live.removeAttribute("aria-busy");
+      const line = live.querySelector(".statusline");
+      if (line) {
+        line.setAttribute("data-state", face.state);
+        let spin = line.querySelector(".spin");
+        if (face.ariaBusy && !spin) {
+          spin = document.createElement("span");
+          spin.className = "spin";
+          spin.setAttribute("aria-hidden", "true");
+          line.insertBefore(spin, line.firstChild);
+        }
+        if (!face.ariaBusy && spin) spin.remove();
+        const status = line.querySelector("[data-status]");
+        if (status) status.textContent = face.label || "";
+      }
+      const slot = document.getElementById("ship-summary");
+      if (slot) {
+        slot.replaceChildren();
+        if (face.summaryKind === "working") {
+          const box = document.createElement("div");
+          box.className = "working";
+          box.setAttribute("role", "status");
+          const spin = document.createElement("span");
+          spin.className = "spin";
+          const text = document.createElement("span");
+          text.className = "worktext";
+          text.textContent = face.summary || "";
+          const move = document.createElement("span");
+          move.className = "bar";
+          box.append(spin, text, move);
+          slot.append(box);
+        } else if (face.summaryKind === "error") {
+          const alert = document.createElement("p");
+          alert.className = "ship-error";
+          alert.setAttribute("role", "alert");
+          alert.textContent = face.summary || "";
+          slot.append(alert);
+        } else {
+          const paragraph = document.createElement("p");
+          paragraph.textContent = face.summary || "";
+          slot.append(paragraph);
+        }
+      }
+      const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+      setText("meter-cpu", face.cpu || "—");
+      setText("meter-memory", face.memory || "—");
+      setText("meter-health", face.health || "—");
+      setText("meter-errors", face.errors || "0");
+      setText("meter-window", face.window || "—");
+      const last = document.getElementById("ship-last-error");
+      if (last) {
+        const empty = !face.lastError || face.lastError === "—";
+        last.hidden = empty;
+        last.textContent = empty ? "" : uiText.lastError + ": " + face.lastError;
+      }
+      const built = document.getElementById("ship-image");
+      if (built) {
+        built.hidden = !face.image;
+        built.textContent = face.image ? uiText.imagePin + " " + face.image : "";
+      }
+      const route = document.getElementById("ship-path");
+      if (route) route.textContent = (face.playgroundLine || "") + " · http://127.0.0.1:3000/playground";
+      const start = document.getElementById("ship-start");
+      if (start) { start.disabled = !!face.startDisabled; start.textContent = face.startText || start.textContent; start.title = face.summary || ""; }
+      const play = document.getElementById("open-playground");
+      if (play) play.disabled = !!face.playgroundDisabled;
+      const rebuild = document.getElementById("ship-rebuild");
+      if (rebuild) rebuild.disabled = !!face.rebuildDisabled;
+      const stop = document.getElementById("ship-stop");
+      if (stop) stop.disabled = !!face.stopDisabled;
+      const refresh = document.getElementById("ship-refresh");
+      if (refresh) refresh.disabled = !!face.refreshDisabled;
     }
     let savedWait;
     window.addEventListener("message", (event) => {
@@ -1268,11 +1857,169 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         clearTimeout(savedWait);
         savedWait = setTimeout(markSaved, 180);
       }
+      if (data.type === "connect-log") {
+        const pre = document.querySelector('[data-connect-log="' + data.channel + '"]');
+        const status = document.querySelector('[data-connect-status="' + data.channel + '"]');
+        if (pre) {
+          pre.textContent = data.text || uiText.noLog;
+          pre.scrollTop = pre.scrollHeight;
+        }
+        if (status) status.textContent = data.status || "";
+      }
+      function paintChart(bars, measure, facts) {
+        const host = document.getElementById("gcp-chart");
+        const meters = document.getElementById("gcp-meters");
+        if (!host) return;
+        const rows = Array.isArray(bars) ? bars : [];
+        const values = rows.map((bar) => Math.round(Number(bar.ms) || 0)).sort((a, b) => a - b);
+        const slow = values.length ? values[values.length - 1] : 0;
+        const shown = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms";
+        const dash = "—";
+        const caption = document.querySelector(".chart-card figcaption");
+        if (caption) caption.textContent = uiText.chartAccept;
+        const legend = document.querySelector(".chart-card .legend");
+        if (legend) legend.innerHTML = '<i class="ok"></i>' + uiText.latency + '<i class="prep"></i>' + uiText.prep + '<i class="bad"></i>' + uiText.errors;
+        if (meters && facts) {
+          const card = (name, value, tone) => '<article class="' + (tone || "") + '"><span>' + name + '</span><strong>' + value + '</strong></article>';
+          const prep = Number(facts.prepMs) || 0;
+          const turn = Number(facts.replyMedianMs) || 0;
+          const accept = Number(facts.acceptMedianMs) || 0;
+          const p95 = Number(facts.acceptP95Ms) || 0;
+          const requests = Number(facts.calls) || 0;
+          meters.innerHTML = '<div class="kpis primary">' + card(uiText.calls, String(requests), "") + card(uiText.errors, String(facts.rejected || 0), facts.rejected ? "bad" : "") + card(uiText.latency, requests ? shown(accept) : dash, accept >= 1000 ? "wait" : "") + card(uiText.p95, requests ? shown(p95) : dash, p95 >= 1000 ? "wait" : "") + '</div><div class="kpis secondary">' + card(uiText.turnTime, turn ? shown(turn) : dash, turn >= 8000 ? "wait" : "") + card(uiText.prep, prep ? shown(prep) : dash, prep >= 3000 ? "wait" : "") + card(uiText.cut, String(facts.interrupted || 0), facts.interrupted ? "wait" : "") + '</div>';
+        }
+        if (!rows.length) {
+          host.innerHTML = '<p class="hint">' + uiText.noCalls + '</p>';
+          return;
+        }
+        const w = Math.max(360, host.clientWidth || 520);
+        const h = 196;
+        const left = 42;
+        const bottom = 28;
+        const top = 8;
+        const max = Math.max(slow, 1);
+        const ticks = [0, Math.round(max / 2), max];
+        const inner = w - left - 12;
+        const bw = Math.min(22, Math.max(8, (inner / rows.length) - 10));
+        const gap = (inner - bw * rows.length) / (rows.length + 1);
+        const yOf = (ms) => top + (h - bottom - top) * (1 - ms / max);
+        const parts = ['<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" role="img">'];
+        ticks.forEach((tick) => {
+          const y = yOf(tick);
+          parts.push('<line x1="' + left + '" y1="' + y + '" x2="' + (w - 8) + '" y2="' + y + '" stroke="currentColor" stroke-opacity="0.15"/>');
+          const tickLabel = max >= 1000 ? (tick / 1000).toFixed(tick >= 10000 ? 0 : 1) + "s" : String(tick);
+          parts.push('<text x="' + (left - 6) + '" y="' + (y + 3) + '" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55">' + tickLabel + '</text>');
+        });
+        rows.forEach((bar, index) => {
+          const ms = Math.round(Number(bar.ms) || 0);
+          const bh = Math.max(3, (h - bottom) - yOf(ms));
+          const x = left + gap + index * (bw + gap);
+          const y = (h - bottom) - bh;
+          const color = !bar.ok ? "#F04438" : ms >= 1000 ? "#F5B942" : "#22C55E";
+          parts.push('<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="3" fill="' + color + '"><title>' + (bar.label || "") + " " + ms + ' ms</title></rect>');
+          if (rows.length <= 8) parts.push('<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">' + (bar.label || "") + '</text>');
+        });
+        parts.push("</svg>");
+        host.innerHTML = parts.join("");
+      }
+      if (data.type === "gcp-signal") {
+        gcpWatchBusy = false;
+        paintChart(data.bars, data.measure, data.facts);
+        const headline = document.getElementById("gcp-signal-headline");
+        if (headline) {
+          headline.dataset.state = data.kind === "error" ? "failed" : "running";
+          headline.textContent = data.headline || "";
+        }
+        const webhook = document.getElementById("gcp-signal-webhook");
+        if (webhook) webhook.textContent = data.webhook || "";
+        const turn = document.getElementById("gcp-signal-turn");
+        if (turn) turn.textContent = data.turn || "";
+        const advice = document.getElementById("gcp-signal-advice");
+        if (advice) advice.textContent = data.advice || "";
+      }
+      if (data.type === "gcp-status") {
+        if (data.kind !== "working") gcpWatchBusy = false;
+        if (data.face === false) { showGcpStatus("", ""); stopClock(); return; }
+        armGcp(data.text || "", data.kind || "", data.step || "");
+        const trail = document.getElementById("gcp-trail");
+        if (trail && Array.isArray(data.trail)) {
+          trail.replaceChildren();
+          for (const line of data.trail) {
+            const item = document.createElement("li");
+            item.textContent = line || "";
+            trail.append(item);
+          }
+        }
+        if (data.image) {
+          const image = document.getElementById("gcp-image");
+          if (image) {
+            image.hidden = false;
+            image.textContent = uiText.imagePin + " " + data.image;
+          }
+        }
+        const link = document.getElementById("gcp-url");
+        if (link && data.url) {
+          link.hidden = false;
+          link.textContent = data.url;
+          link.href = data.url;
+        }
+      }
+      if (data.type === "gcp-image") {
+        const image = document.getElementById("gcp-image");
+        if (image && data.image) {
+          image.hidden = false;
+          image.textContent = uiText.imagePin + " " + data.image;
+        }
+        const target = document.getElementById("gcp-target");
+        if (target) {
+          target.hidden = !data.target;
+          target.textContent = data.target || "";
+        }
+        const held = document.getElementById("gcp-verdict");
+        const pinned = Boolean(held && !held.hidden);
+        const summary = document.getElementById("gcp-summary");
+        if (!pinned && summary && data.summary) summary.textContent = data.summary;
+        const list = document.getElementById("gcp-checks");
+        if (list && Array.isArray(data.checks)) {
+          list.replaceChildren();
+          for (const row of data.checks) {
+            const item = document.createElement("li");
+            item.className = row.ok ? "ok" : "miss";
+            item.textContent = row.text || "";
+            list.append(item);
+          }
+        }
+        const line = document.querySelector("#gcp-live .statusline");
+        const label = line?.querySelector("[data-gcp-label]");
+        if (!pinned && line && label && data.label) {
+          line.dataset.state = "stopped";
+          label.textContent = data.label;
+        }
+      }
+      if (data.type === "gcp-secrets-cleared") {
+        const names = Array.isArray(data.names) ? data.names : null;
+        for (const input of document.querySelectorAll("[data-gcp-secret]")) {
+          if (!names || names.includes(input.dataset.gcpSecret)) input.value = "";
+        }
+      }
       if (data.type === "ship-log") {
-        String(data.text || "").split(/\\n/).forEach((line) => { if (line) logLines.push(line); });
+        if (data.replace) logLines = String(data.text || "").split(/\\n/).filter((line) => String(line).trim());
+        else String(data.text || "").split(/\\n/).forEach((line) => { if (line) logLines.push(line); });
         paintLogs();
-        const pre = document.getElementById("ship-log");
-        if (pre) pre.scrollTop = pre.scrollHeight;
+        for (const id of ["ship-log", "gcp-log"]) {
+          const pre = document.getElementById(id);
+          if (pre) pre.scrollTop = pre.scrollHeight;
+        }
+      }
+      if (data.type === "ship-face") {
+        applyFace(data.face);
+        if (typeof data.logs === "string" && data.logs.trim()) {
+          const pre = document.getElementById("ship-log");
+          const stick = !pre || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 48;
+          logLines = data.logs.split(/\\n/);
+          paintLogs();
+          if (stick && pre) pre.scrollTop = pre.scrollHeight;
+        }
       }
       if (data.type === "hint") {
         const el = document.getElementById("saved");

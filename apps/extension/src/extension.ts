@@ -1,13 +1,15 @@
 import * as vscode from "vscode";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { designerHtml, libraryHtml, type ShipStatus, type Ui } from "./designer";
+import { designerHtml, libraryHtml, shipFace, type ShipStatus, type Ui } from "./designer";
 import { phrase, t } from "./copy";
 import {
   arrange,
   captureFolder,
   deleteItem,
+  deliveryCheck,
   emitSdk,
   ensureStudioFile,
   flowLinks,
@@ -28,7 +30,32 @@ import {
   loadProject,
   readLayout,
   scanWorkspace,
-  cardNeeds,
+  applyProposal,
+  assistantContext,
+  chatHandoff,
+  cloudRunArgs,
+  cloudRunPlan,
+  cloudRunRuntimeAccount,
+  secretAccessorArgs,
+  composeImageId,
+  gcpChecks,
+  gcpPreview,
+  shortImage,
+  cloudRunImageMatch,
+  serviceMissing,
+  parseServiceRelease,
+  releasedImage,
+  secretSyncPlan,
+  hasPublicChannel,
+  parseGcpLink,
+  redactValues,
+  readGcpLink,
+  writeGcpLink,
+  computerLocale,
+  languageChoice,
+  proposalLabel,
+  readProposal,
+  replyWithoutProposal,
   composeIsRunning,
   composePortClosed,
   PORT_CLOSED,
@@ -41,6 +68,7 @@ import {
   secretValue,
   slackCheckTarget,
   telegramSetWebhookTarget,
+  webhookNeedsLocal,
   whatsappCheckTarget,
   whatsappSendTarget,
   safeRelative,
@@ -53,7 +81,26 @@ import {
   setCanvasNode,
   setSecret,
   slug,
+  imageName,
+  parseImageId,
+  portHolder,
+  consoleCommand,
+  consoleAppend,
+  pushProgress,
+  windowsShell,
+  pickGcloud,
+  agentSignal,
+  channelBars,
+  monitorFacts,
+  monitorFilter,
+  parseLogEntries,
+  commandFailure,
+  readCommandLog,
+  formatCommand,
+  readImagePin,
+  shipArgs,
   writeDocker,
+  writeImagePin,
   type FolderShot,
   type Item,
   type Kind,
@@ -97,7 +144,8 @@ function readUi(context: vscode.ExtensionContext): Ui {
     inspectorOpen: saved?.inspectorOpen !== false,
     libraryWidth: saved?.libraryWidth ?? 240,
     inspectorWidth: saved?.inspectorWidth ?? 300,
-    lang: saved?.lang === "es" ? "es" : saved?.lang === "en" ? "en" : vscode.env.language.toLowerCase().startsWith("es") ? "es" : "en",
+    lang: languageChoice(saved?.lang, computerLocale()),
+    shipTarget: saved?.shipTarget === "gcp" || saved?.shipTarget === "aws" || saved?.shipTarget === "azure" ? saved.shipTarget : "local",
   };
 }
 
@@ -127,14 +175,20 @@ class Home implements vscode.WebviewViewProvider {
   private clip?: Item;
   private pulseAt = 0;
   private ship: ShipStatus = { docker: "unknown", running: false, failed: false, phase: "idle", summary: "Stopped. Start builds the image and runs it here.", logs: "", publicUrl: "", stats: { cpu: "—", memory: "—", healthMs: null } };
-  private lm: { ok: boolean; reason: string } = { ok: false, reason: "Test the editor model before asking." };
+  private lm: { ok: boolean; reason: string; models: { id: string; name: string }[]; modelId: string } = { ok: true, reason: "Write a question. Sending uses the model you picked.", models: [], modelId: "" };
   private lmModel: vscode.LanguageModelChat | undefined;
-  private ask: { role: "you" | "guide"; text: string }[] = [];
+  private ask: { role: "you" | "guide"; text: string; proposal?: import("./project").Proposal; applied?: boolean }[] = [];
   private askOpen = false;
   private secretFocus = "";
   private shipProc?: ChildProcess;
+  private logProc?: ChildProcess;
+  private statsTimer?: ReturnType<typeof setInterval>;
   private tunnelProc?: ChildProcess;
   private shipGen = 0;
+  private gcpNote = "";
+  private gcpVerdict: { text: string; step: "current" | "other" | "unknown"; image: string } | null = null;
+  private gcpTrail: string[] = [];
+  private gcloudExe = "";
 
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(
@@ -161,6 +215,7 @@ class Home implements vscode.WebviewViewProvider {
         retainContextWhenHidden: true,
       });
       this.panel.onDidDispose(() => {
+        this.stopLogFollow();
         this.panel = undefined;
         this.watcher?.dispose();
         this.watcher = undefined;
@@ -230,7 +285,20 @@ class Home implements vscode.WebviewViewProvider {
     return `${item.kind}:${name}`;
   }
 
-  private docker(root: string, args: string[], onChunk?: (text: string) => void, track = false, timeoutMs = 20000): Promise<number> {
+  private showConsole(text: string): void {
+    this.shipNote(this.shipGen, text);
+  }
+
+  private noteChannel(channel: string, line: string): void {
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    const spoken = phrase(lang, line);
+    const prev = this.ship.channelLogs?.[channel] || "";
+    const text = `${prev}${prev && !prev.endsWith("\n") ? "\n" : ""}${spoken}\n`.slice(-8000);
+    this.ship = { ...this.ship, summary: spoken, channelLogs: { ...(this.ship.channelLogs || {}), [channel]: text } };
+    this.panel?.webview.postMessage({ type: "connect-log", channel, text, status: spoken });
+  }
+
+  private docker(root: string, args: string[], onChunk?: (text: string) => void, track = false, timeoutMs = 20000, visible = false, redact: (text: string) => string = (text) => text): Promise<number> {
     return new Promise((resolve) => {
       let settled = false;
       let child: ChildProcess | undefined;
@@ -241,10 +309,13 @@ class Home implements vscode.WebviewViewProvider {
         if (timer) clearTimeout(timer);
         resolve(code);
       };
+      if (visible) this.showConsole(redact(formatCommand("docker", args)));
       try {
         child = spawn("docker", args, { cwd: root, windowsHide: true, shell: process.platform === "win32" });
       } catch (error) {
-        onChunk?.(error instanceof Error ? `${error.message}\n` : "Could not start Docker.\n");
+        const message = error instanceof Error ? `${error.message}\n` : "Could not start Docker.\n";
+        onChunk?.(message);
+        if (visible) this.showConsole(redact(message));
         finish(1);
         return;
       }
@@ -252,48 +323,119 @@ class Home implements vscode.WebviewViewProvider {
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           onChunk?.("Docker did not answer in time.\n");
+          if (visible) this.showConsole("Docker did not answer in time.\n");
           if (child?.pid && process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
           else child?.kill();
           finish(1);
         }, timeoutMs);
       }
-      const take = (chunk: Buffer) => onChunk?.(chunk.toString("utf8"));
+      const take = (chunk: Buffer) => {
+        const text = chunk.toString("utf8");
+        onChunk?.(text);
+        if (visible) this.showConsole(redact(text));
+      };
       child.stdout?.on("data", take);
       child.stderr?.on("data", take);
       child.on("error", (error) => {
-        onChunk?.(`${error.message}\n`);
+        const message = `${error.message}\n`;
+        onChunk?.(message);
+        if (visible) this.showConsole(redact(message));
         finish(1);
       });
-      child.on("close", (code) => finish(code ?? 1));
+      child.on("close", (code) => {
+        const exit = code ?? 1;
+        if (visible && exit !== 0) this.showConsole(`exit ${exit}`);
+        finish(exit);
+      });
     });
   }
 
   private shipNote(gen: number, text: string): void {
     if (gen !== this.shipGen) return;
-    const line = text.endsWith("\n") ? text : `${text}\n`;
-    this.ship = { ...this.ship, logs: (this.ship.logs + line).slice(-12000) };
-    const spoken = phrase(readUi(this.context).lang, line.replace(/\n$/, ""));
-    this.panel?.webview.postMessage({ type: "ship-log", text: `${spoken}\n` });
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    const folded = consoleAppend(this.ship.logs, text).slice(-20000);
+    const open = folded.endsWith("\r");
+    const body = open ? folded.slice(0, -1) : folded;
+    const spoken = body.split("\n").map((line) => /^[0-9a-f]{12}: /.test(line) || line.startsWith("$ ") ? line : phrase(lang, line)).join("\n");
+    this.ship = { ...this.ship, logs: spoken + (open ? "\r" : "") };
+    this.panel?.webview.postMessage({ type: "ship-log", text: spoken, replace: true });
   }
 
   private daemonDown(text: string): boolean {
     return /dockerDesktopLinuxEngine|Cannot connect to the Docker daemon|error during connect|cannot find the file specified/i.test(text);
   }
 
+  private paintShip(includeLogs = true): void {
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    const root = folder();
+    const pin = root && isProject(root) ? readImagePin(root) : null;
+    if (pin) this.ship = { ...this.ship, image: pin };
+    const blocked = root && isProject(root) ? deliveryCheck(root).length > 0 : false;
+    const face = shipFace(this.ship, lang, blocked);
+    const logs = includeLogs ? this.ship.logs.split(/\n/).map((line) => phrase(lang, line)).join("\n") : undefined;
+    this.panel?.webview.postMessage(includeLogs ? { type: "ship-face", face, logs } : { type: "ship-face", face });
+  }
+
+  private stopLogFollow(): void {
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer);
+      this.statsTimer = undefined;
+    }
+    const proc = this.logProc;
+    this.logProc = undefined;
+    if (!proc) return;
+    if (process.platform === "win32" && proc.pid) spawn("taskkill", ["/pid", String(proc.pid), "/t", "/f"], { windowsHide: true });
+    else proc.kill();
+  }
+
+  private startLogFollow(root: string, tail: "0" | "200"): void {
+    this.stopLogFollow();
+    const gen = this.shipGen;
+    const names = loadProject(root).secrets.map((row) => row.name);
+    this.showConsole(formatCommand("docker", ["compose", "logs", "-f", "--tail", tail, "--no-color"]));
+    const child = spawn("docker", ["compose", "logs", "-f", "--tail", tail, "--no-color"], { cwd: root, windowsHide: true, shell: process.platform === "win32" });
+    this.logProc = child;
+    const take = (chunk: Buffer) => {
+      if (gen !== this.shipGen || this.logProc !== child) return;
+      const clean = scrubLogs(chunk.toString("utf8"), names);
+      if (!clean.trim() && !clean.includes("\r")) return;
+      this.shipNote(gen, clean);
+    };
+    child.stdout?.on("data", take);
+    child.stderr?.on("data", take);
+    child.on("close", () => {
+      if (this.logProc === child) this.logProc = undefined;
+    });
+    this.statsTimer = setInterval(() => {
+      if (gen !== this.shipGen || !this.ship.running) return;
+      void this.localStats(root).then((stats) => {
+        if (gen !== this.shipGen) return;
+        this.ship = { ...this.ship, stats };
+        if (readUi(this.context).mode === "deploy") this.paintShip(false);
+      });
+    }, 8000);
+  }
+
+  private showShip(): void {
+    if (readUi(this.context).mode === "deploy") this.paintShip();
+    else this.render();
+  }
+
   private async refreshShip(root: string): Promise<void> {
+    this.stopLogFollow();
     const gen = this.shipGen;
     const wasStart = this.ship.phase === "building" || this.ship.phase === "rebuilding";
     try {
     if (this.ship.phase === "idle" || this.ship.phase === "checking") {
       this.ship = { ...this.ship, phase: "checking", summary: "Checking Docker on this machine.", logs: `${this.ship.logs}Checking Docker on this machine.\n`.slice(-12000) };
-      this.render();
+      this.showShip();
     }
     const names = loadProject(root).secrets.map((row) => row.name);
+    const scrub = (text: string) => scrubLogs(text, names);
     let info = "";
     const infoCode = await this.docker(root, ["info", "--format", "{{.ServerVersion}}"], (text) => {
       info += text;
-      this.shipNote(gen, scrubLogs(text, names));
-    }, false, 12000);
+    }, false, 12000, true, scrub);
     if (gen !== this.shipGen) return;
     if (infoCode !== 0 || this.daemonDown(info)) {
       const problem = dockerProblem(info);
@@ -309,14 +451,13 @@ class Home implements vscode.WebviewViewProvider {
         publicUrl: this.ship.publicUrl,
         stats: { cpu: "—", memory: "—", healthMs: null },
       };
-      this.render();
+      this.showShip();
       return;
     }
     let ps = "";
-    this.shipNote(gen, "Docker answered. Checking the container.");
     const psCode = await this.docker(root, ["compose", "ps", "--format", "json"], (text) => {
       ps += text;
-    }, false, 12000);
+    }, false, 12000, true, scrub);
     if (gen !== this.shipGen) return;
     if (psCode !== 0 || this.daemonDown(ps)) {
       this.ship = {
@@ -326,18 +467,17 @@ class Home implements vscode.WebviewViewProvider {
         phase: "idle",
         dockerWhy: "down",
         summary: DOCKER_DOWN,
-        logs: scrubLogs(ps || info, names).slice(-8000),
+        logs: this.ship.logs,
         publicUrl: this.ship.publicUrl,
         stats: { cpu: "—", memory: "—", healthMs: null },
       };
-      this.render();
+      this.showShip();
       return;
     }
     let logs = "";
-    this.shipNote(gen, "Reading the container log.");
     await this.docker(root, ["compose", "logs", "--tail", "200", "-t", "--no-color"], (text) => {
       logs += text;
-    }, false, 12000);
+    }, false, 12000, true, scrub);
     if (gen !== this.shipGen) return;
     const clean = scrubLogs(logs, names);
     const portClosed = composePortClosed(ps);
@@ -352,16 +492,20 @@ class Home implements vscode.WebviewViewProvider {
       phase: "idle",
       summary: running ? "Listening on http://127.0.0.1:3000." : portClosed ? PORT_CLOSED : failed ? "The container is not running. Read the log." : "Stopped. Start builds the image and runs it here.",
       republish: portClosed,
-      logs: clean.slice(-8000),
+      logs: this.ship.logs,
       publicUrl: this.ship.publicUrl,
       stats,
     };
-    this.render();
+    this.showShip();
+    const found = await this.localImageId(root);
+    if (gen === this.shipGen && found) this.publishGcpFace(root, found);
+    if (this.ship.running) this.startLogFollow(root, clean.trim() ? "0" : "200");
+    else this.stopLogFollow();
     } catch (error) {
       if (gen !== this.shipGen) return;
       const message = error instanceof Error ? error.message : "The check stopped.";
       this.ship = { ...this.ship, phase: "idle", failed: true, running: false, summary: message, logs: `${this.ship.logs}${message}\n`.slice(-8000) };
-      this.render();
+      this.showShip();
     }
   }
 
@@ -395,6 +539,7 @@ class Home implements vscode.WebviewViewProvider {
 
   private async compose(root: string, args: string[], phase: "building" | "stopping" | "rebuilding"): Promise<void> {
     const gen = ++this.shipGen;
+    this.stopLogFollow();
     this.shipProc?.kill();
     const names = loadProject(root).secrets.map((row) => row.name);
     this.ship = {
@@ -403,24 +548,20 @@ class Home implements vscode.WebviewViewProvider {
       summary: phase === "rebuilding" ? "Rebuilding the image and recreating the container so it reads the current secrets." : phase === "building" ? "Building the local image. The log shows each step." : "Stopping the local agent.",
       logs: phase === "building" ? "Building the local image. The log shows each step.\n" : phase === "rebuilding" ? "Rebuilding the image and recreating the container so it reads the current secrets.\n" : "Stopping the local agent.\n",
     };
-    this.render();
-    const code = await this.docker(
-      root,
-      args,
-      (text) => {
-        if (gen !== this.shipGen) return;
-        const clean = scrubLogs(text, names);
-        this.ship = { ...this.ship, logs: (this.ship.logs + clean).slice(-12000) };
-        this.panel?.webview.postMessage({ type: "ship-log", text: clean });
-      },
-      true,
-      0,
-    );
+    this.showShip();
+    const code = await this.docker(root, args, undefined, true, 0, true, (text) => scrubLogs(text, names));
     if (gen !== this.shipGen) return;
     if (code !== 0 || this.daemonDown(this.ship.logs)) {
       const why = dockerProblem(this.ship.logs);
       const down = why === "down" || this.daemonDown(this.ship.logs);
       const missing = why === "missing";
+      let owners = "";
+      if (/port is already allocated|address already in use/i.test(this.ship.logs)) {
+        await this.docker(root, ["ps", "--format", "{{.Names}} {{.Ports}}"], (text) => {
+          owners += text;
+        }, false, 12000, true, (text) => scrubLogs(text, names));
+      }
+      const taken = portHolder(this.ship.logs, owners);
       this.ship = {
         ...this.ship,
         docker: missing || down ? "down" : this.ship.docker,
@@ -428,7 +569,9 @@ class Home implements vscode.WebviewViewProvider {
         running: false,
         failed: !missing && !down,
         phase: "idle",
-        summary: missing
+        summary: taken
+          ? taken
+          : missing
           ? DOCKER_MISSING
           : down
             ? DOCKER_DOWN
@@ -438,10 +581,69 @@ class Home implements vscode.WebviewViewProvider {
                 ? "Rebuild did not finish. Read the log."
                 : "Stop did not finish. Read the log.",
       };
-      this.render();
+      this.showShip();
       return;
     }
+    if (args.includes("--build")) await this.rememberImage(root);
     await this.refreshShip(root);
+  }
+
+  private async localImageId(root: string): Promise<string | null> {
+    let listed = "";
+    const listedCode = await this.docker(root, ["compose", "images", "--format", "json"], (text) => {
+      listed += text;
+    }, false, 12000);
+    const fromCompose = listedCode === 0 ? composeImageId(listed) : null;
+    if (fromCompose) {
+      writeImagePin(root, fromCompose);
+      return fromCompose;
+    }
+    const pinned = readImagePin(root);
+    if (pinned) return pinned;
+    let text = "";
+    const named = imageName(loadProject(root).name);
+    const code = await this.docker(root, ["image", "inspect", "--format", "{{.Id}}", named], (chunk) => {
+      text += chunk;
+    }, false, 12000);
+    const id = parseImageId(text);
+    if (code !== 0 || !id) return null;
+    writeImagePin(root, id);
+    return id;
+  }
+
+  private publishGcpFace(root: string, imageId: string): void {
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    const project = loadProject(root);
+    const link = readGcpLink(root);
+    const preview = gcpPreview({ agentName: project.name, imageId, project: link.project, region: link.region, url: link.url });
+    const label = preview.state === "published" ? t(lang, "gcp_published") : preview.state === "need-image" ? t(lang, "gcp_need_image") : t(lang, "gcp_ready");
+    const checks = gcpChecks({
+      imageId,
+      project: link.project,
+      region: link.region,
+      secrets: project.secrets.map((row) => ({ name: row.name, configured: row.configured })),
+    }).map((row) => ({ ok: row.ok, text: phrase(lang, row.text) }));
+    this.panel?.webview.postMessage({
+      type: "gcp-image",
+      image: preview.image,
+      target: preview.target,
+      summary: phrase(lang, preview.summary),
+      label,
+      checks,
+    });
+  }
+
+  private async rememberImage(root: string): Promise<void> {
+    const name = imageName(loadProject(root).name);
+    let text = "";
+    const code = await this.docker(root, ["image", "inspect", "--format", "{{.Id}}", name], (chunk) => {
+      text += chunk;
+    }, false, 12000, true);
+    const id = parseImageId(text);
+    if (code !== 0 || !id) return;
+    writeImagePin(root, id);
+    writeDocker(root, true);
+    this.ship = { ...this.ship, image: id };
   }
 
   private async openTunnel(): Promise<void> {
@@ -451,6 +653,7 @@ class Home implements vscode.WebviewViewProvider {
     this.render();
     let child: ChildProcess;
     try {
+      this.showConsole(formatCommand("cloudflared", ["tunnel", "--url", "http://127.0.0.1:3000"]));
       child = spawn("cloudflared", ["tunnel", "--url", "http://127.0.0.1:3000"], { windowsHide: true, shell: process.platform === "win32" });
     } catch (error) {
       this.ship = {
@@ -465,7 +668,9 @@ class Home implements vscode.WebviewViewProvider {
     let buffer = "";
     const found = new Promise<string>((resolve) => {
       const take = (chunk: Buffer) => {
-        buffer += chunk.toString("utf8");
+        const text = chunk.toString("utf8");
+        buffer += text;
+        this.showConsole(text);
         const match = buffer.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
         if (match) resolve(match[0]);
       };
@@ -501,16 +706,25 @@ class Home implements vscode.WebviewViewProvider {
     const names = loadProject(root).secrets.map((row) => row.name);
     const target = telegramSetWebhookTarget(secretValue(root, "TELEGRAM_BOT_TOKEN"), secretValue(root, "TELEGRAM_WEBHOOK_SECRET"), publicBase);
     if ("error" in target) {
+      this.noteChannel("telegram", target.error);
       this.ship = { ...this.ship, phase: "idle", publicUrl: publicBase.trim(), summary: target.error };
       this.render();
       return;
     }
+    if (webhookNeedsLocal(target.hook)) {
+      if (!this.ship.running) {
+        const summary = "Start the local agent first. This address calls this machine.";
+        this.noteChannel("telegram", summary);
+        this.ship = { ...this.ship, phase: "idle", publicUrl: publicBase.trim(), summary };
+        this.render();
+        return;
+      }
     this.ship = { ...this.ship, phase: "webhook", publicUrl: publicBase.trim(), summary: "Restarting the agent so it reads the current secrets." };
     this.render();
     let restart = "";
     const code = await this.docker(root, ["compose", "up", "-d", "--force-recreate"], (text) => {
       restart += text;
-    });
+    }, false, 0, true, (text) => scrubLogs(text, names));
     if (gen !== this.shipGen) return;
     if (code !== 0 || this.daemonDown(restart)) {
       this.ship = {
@@ -518,7 +732,7 @@ class Home implements vscode.WebviewViewProvider {
         phase: "idle",
         docker: this.daemonDown(restart) ? "down" : this.ship.docker,
         summary: this.daemonDown(restart) ? "Docker Desktop is not running. Open it, then Register webhook again." : "The agent did not restart. Read the log, then Register webhook again.",
-        logs: scrubLogs(restart, names).slice(-8000),
+        logs: this.ship.logs,
       };
       this.render();
       return;
@@ -530,20 +744,23 @@ class Home implements vscode.WebviewViewProvider {
       this.render();
       return;
     }
-    this.ship = { ...this.ship, summary: "Telling Telegram the public address." };
+    }
+    this.ship = { ...this.ship, phase: "webhook", publicUrl: publicBase.trim(), summary: `Telling Telegram to call ${target.hook}.` };
+    this.noteChannel("telegram", `Telling Telegram to call ${target.hook}.`);
     this.render();
     let summary = "Telegram did not answer. Register webhook again.";
     try {
       const response = await fetch(target.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: target.body });
       const payload = (await response.json()) as { ok?: boolean; description?: string };
       summary = payload.ok
-        ? "Webhook registered. Open the bot in Telegram and ask what its hours are."
+        ? `Webhook registered. Telegram will call ${target.hook}.`
         : `Telegram refused the webhook: ${payload.description || response.status}.`;
     } catch {
       summary = "Could not reach Telegram. Check the network, then Register webhook again.";
     }
+    this.noteChannel("telegram", summary);
     if (gen !== this.shipGen) return;
-    this.ship = { ...this.ship, phase: "idle", running: true, docker: "ready", summary: scrubLogs(summary, names) };
+    this.ship = { ...this.ship, phase: "idle", running: webhookNeedsLocal(target.hook) ? true : this.ship.running, docker: webhookNeedsLocal(target.hook) ? "ready" : this.ship.docker, summary: scrubLogs(summary, names) };
     this.render();
   }
 
@@ -551,10 +768,12 @@ class Home implements vscode.WebviewViewProvider {
     const names = loadProject(root).secrets.map((row) => row.name);
     const target = whatsappCheckTarget(secretValue(root, "WHATSAPP_TOKEN"), secretValue(root, "WHATSAPP_PHONE_NUMBER_ID"));
     if ("error" in target) {
+      this.noteChannel("whatsapp", target.error);
       this.ship = { ...this.ship, phase: "idle", summary: target.error };
       this.render();
       return;
     }
+    this.noteChannel("whatsapp", "Asking Meta whether this token matches the phone number ID.");
     this.ship = { ...this.ship, phase: "checking", summary: "Asking Meta whether this token matches the phone number ID." };
     this.render();
     let summary = "Could not reach Meta. Check the network, then try again.";
@@ -564,6 +783,7 @@ class Home implements vscode.WebviewViewProvider {
     } catch {
       summary = "Could not reach Meta. Check the network, then try again.";
     }
+    this.noteChannel("whatsapp", summary);
     this.ship = { ...this.ship, phase: "idle", summary: scrubLogs(summary, names) };
     this.render();
   }
@@ -572,10 +792,12 @@ class Home implements vscode.WebviewViewProvider {
     const names = loadProject(root).secrets.map((row) => row.name);
     const target = whatsappSendTarget(secretValue(root, "WHATSAPP_TOKEN"), secretValue(root, "WHATSAPP_PHONE_NUMBER_ID"), to);
     if ("error" in target) {
+      this.noteChannel("whatsapp", target.error);
       this.ship = { ...this.ship, phase: "idle", summary: target.error };
       this.render();
       return;
     }
+    this.noteChannel("whatsapp", "Sending hello through WhatsApp.");
     this.ship = { ...this.ship, phase: "checking", summary: "Sending hello through WhatsApp." };
     this.render();
     let summary = "Could not reach Meta. Check the network, then try again.";
@@ -585,6 +807,7 @@ class Home implements vscode.WebviewViewProvider {
     } catch {
       summary = "Could not reach Meta. Check the network, then try again.";
     }
+    this.noteChannel("whatsapp", summary);
     this.ship = { ...this.ship, phase: "idle", summary: scrubLogs(summary, names) };
     this.render();
   }
@@ -593,10 +816,12 @@ class Home implements vscode.WebviewViewProvider {
     const names = loadProject(root).secrets.map((row) => row.name);
     const target = slackCheckTarget(secretValue(root, "SLACK_BOT_TOKEN"));
     if ("error" in target) {
+      this.noteChannel("slack", target.error);
       this.ship = { ...this.ship, phase: "idle", summary: target.error };
       this.render();
       return;
     }
+    this.noteChannel("slack", "Asking Slack who this bot is.");
     this.ship = { ...this.ship, phase: "checking", summary: "Asking Slack who this bot is." };
     this.render();
     let summary = "Could not reach Slack. Check the network, then try again.";
@@ -607,6 +832,7 @@ class Home implements vscode.WebviewViewProvider {
     } catch {
       summary = "Could not reach Slack. Check the network, then try again.";
     }
+    this.noteChannel("slack", summary);
     this.ship = { ...this.ship, phase: "idle", summary: scrubLogs(summary, names) };
     this.render();
   }
@@ -631,58 +857,539 @@ class Home implements vscode.WebviewViewProvider {
   }
 
   private followLogs(root: string): void {
-    const existing = vscode.window.terminals.find((term) => term.name === "BigAgentCreator");
-    const term = existing ?? vscode.window.createTerminal({ name: "BigAgentCreator", cwd: root });
-    term.show();
+    const term = this.editorTerminal(root);
+    this.showConsole(formatCommand("docker", ["compose", "logs", "-f", "--tail", "100"]));
     term.sendText("docker compose logs -f --tail 100");
   }
 
-  private async probeLm(): Promise<void> {
-    this.askOpen = true;
+  private editorTerminal(root: string): vscode.Terminal {
+    const existing = vscode.window.terminals.find((term) => term.name === "BigAgentCreator" && !term.exitStatus);
+    const term = existing ?? vscode.window.createTerminal({
+      name: "BigAgentCreator",
+      cwd: root,
+      shellPath: process.platform === "win32" ? "powershell.exe" : undefined,
+    });
+    term.show();
+    return term;
+  }
+
+  private cli(root: string, command: string, args: string[], onChunk: (text: string) => void, timeoutMs = 0, redact: (text: string) => string = (text) => text): Promise<number> {
+    return new Promise((resolve) => {
+      void (async () => {
+      let settled = false;
+      const finish = (code: number) => {
+        if (settled) return;
+        settled = true;
+        resolve(code);
+      };
+      const shown = consoleCommand(command, args);
+      this.showConsole(redact(shown));
+      let captured = "";
+      let child: ChildProcess;
+      const bin = command === "gcloud" && process.platform === "win32" ? await this.gcloudExecutable() : command;
+      if (command === "gcloud" && process.platform === "win32" && !bin) {
+        const message = "Google Cloud CLI is not installed.\n";
+        onChunk(message);
+        this.showConsole(message);
+        finish(1);
+        return;
+      }
+      const logFile = process.platform === "win32" && command === "gcloud" ? path.join(os.tmpdir(), `bigagent-gcloud-${process.pid}-${Date.now()}.log`) : "";
+      const cliEnv = { ...process.env, CLOUDSDK_CORE_DISABLE_PROMPTS: "1", PYTHONIOENCODING: "utf-8", CLOUDSDK_ENCODING: "utf-8" };
+      try {
+        child = logFile
+          ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", windowsShell(bin, args, logFile)], {
+              cwd: root,
+              windowsHide: true,
+              shell: false,
+              windowsVerbatimArguments: true,
+              env: cliEnv,
+            })
+          : spawn(bin, args, {
+              cwd: root,
+              windowsHide: true,
+              shell: process.platform === "win32",
+              env: cliEnv,
+            });
+      } catch (error) {
+        const message = error instanceof Error ? `${error.message}\n` : "Could not start the command.\n";
+        onChunk(message);
+        this.showConsole(redact(message));
+        finish(1);
+        return;
+      }
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        const message = "The command did not answer in time.\n";
+        onChunk(message);
+        this.showConsole(message);
+        if (child.pid && process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+        else child.kill();
+        finish(1);
+      }, timeoutMs) : undefined;
+      const take = (chunk: Buffer) => {
+        const text = chunk.toString("utf8");
+        captured += text;
+        onChunk(text);
+        this.showConsole(redact(text));
+      };
+      child.stdout?.on("data", take);
+      child.stderr?.on("data", take);
+      child.on("error", (error) => {
+        const message = `${error.message}\n`;
+        onChunk(message);
+        this.showConsole(redact(message));
+        if (timer) clearTimeout(timer);
+        finish(1);
+      });
+      const pump = () => {
+        if (!logFile || !fs.existsSync(logFile)) return;
+        const next = readCommandLog(fs.readFileSync(logFile));
+        if (next.length <= captured.length) return;
+        const text = next.slice(captured.length);
+        captured = next;
+        onChunk(text);
+        this.showConsole(redact(text));
+      };
+      const pumpTimer = logFile ? setInterval(pump, 1000) : undefined;
+      child.on("close", (code) => {
+        if (timer) clearTimeout(timer);
+        if (pumpTimer) clearInterval(pumpTimer);
+        pump();
+        if (logFile) fs.rmSync(logFile, { force: true });
+        const exit = code ?? 1;
+        if (exit !== 0 && !captured.trim()) this.showConsole("The command printed nothing.");
+        if (exit !== 0) this.showConsole(`exit ${exit}`);
+        if (/\(y\/N\)|Would you like to enable/i.test(captured)) this.showConsole(`gcloud asked a question. Copy this command into a terminal and answer there: ${shown}`);
+        finish(exit);
+      });
+      })();
+    });
+  }
+
+  private gcloudExecutable(): Promise<string> {
+    if (this.gcloudExe) return Promise.resolve(this.gcloudExe);
+    return new Promise((resolve) => {
+      let out = "";
+      let child: ChildProcess;
+      try {
+        child = spawn("where.exe", ["gcloud.cmd"], { windowsHide: true });
+      } catch {
+        resolve("");
+        return;
+      }
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve("");
+      }, 8000);
+      child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString("utf8"); });
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve("");
+      });
+      child.on("close", () => {
+        clearTimeout(timer);
+        const found = pickGcloud(out);
+        if (found) this.gcloudExe = found;
+        resolve(found);
+      });
+    });
+  }
+
+  private async googleAccount(root: string): Promise<{ email: string } | { error: string }> {
+    let out = "";
+    const code = await this.cli(root, "gcloud", ["auth", "list", "--filter=status:ACTIVE", "--format=value(account)"], (text) => {
+      out += text;
+    }, 20000);
+    if (/not recognized|ENOENT|Google Cloud CLI is not installed/i.test(out)) return { error: "Google Cloud CLI is not installed." };
+    if (code !== 0) {
+      const reason = commandFailure(out) || out.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) || "It printed nothing.";
+      return { error: `Google Cloud CLI failed. ${reason}` };
+    }
+    const email = out.trim().split(/\s+/).find((part) => part.includes("@")) || "";
+    if (!email) return { error: "No active Google account. Run gcloud auth login, then check again." };
+    return { email };
+  }
+
+  private gcpStatus(text: string, kind: "ok" | "error" | "working" = "ok", url = "", step: "" | "push" | "publish" | "working" | "current" | "other" | "unknown" = "", image = ""): void {
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    this.gcpNote = phrase(lang, text);
+    if (this.gcpNote) this.gcpTrail = [...this.gcpTrail, this.gcpNote].slice(-8);
+    if ((step === "current" || step === "other" || step === "unknown") && this.gcpNote) this.gcpVerdict = { text: this.gcpNote, step, image };
+    const face = step || (kind === "working" ? "working" : "");
+    this.panel?.webview.postMessage({ type: "gcp-status", text: this.gcpNote, kind, url, step: face, image, trail: this.gcpTrail });
+  }
+
+  private missingLine(missing: string[]): string {
+    if (missing.length === 1) return `Could not sync ${missing[0]}. It has no local value.`;
+    if (missing.length > 1) return `Could not sync ${missing.join(", ")}. They have no local value.`;
+    return "";
+  }
+
+  private syncSummary(synced: number, failed: string[], missing: string[]): string {
+    const skip = this.missingLine(missing);
+    const tail = skip ? ` ${skip}` : "";
+    if (synced === 0) return `Secret Manager did not accept ${failed.join(", ")}.${tail}`;
+    if (failed.length) return `Synced ${synced} to Secret Manager. ${failed.join(", ")} failed.${tail}`;
+    return `Synced ${synced} to Secret Manager.${tail}`;
+  }
+
+  private async syncGcpSecrets(root: string, projectId: string, overrides: { name: string; value: string }[], only = ""): Promise<void> {
+    const project = projectId.trim();
+    if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(project)) {
+      this.gcpStatus("The GCP project id is missing or not a project id.", "error");
+      return;
+    }
+    const loaded = loadProject(root);
+    const known = loaded.secrets.map((row) => row.name);
+    const names = only ? known.filter((name) => name === only) : known;
+    const local: Record<string, string> = {};
+    for (const name of names) local[name] = secretValue(root, name);
+    const plan = secretSyncPlan(names, overrides, local);
+    if (!plan.ready.length) {
+      this.gcpStatus(plan.missing.length ? this.missingLine(plan.missing) : "This agent has no secret names yet.", "error");
+      return;
+    }
+    this.gcpStatus("Syncing secrets to Secret Manager.", "working");
+    const account = await this.googleAccount(root);
+    if ("error" in account) {
+      this.gcpStatus(account.error, "error");
+      return;
+    }
+    const values = plan.ready.map((row) => row.value);
+    const hide = (text: string) => {
+      let hidden = text;
+      for (const value of [...values].filter((value) => value.length >= 4).sort((left, right) => right.length - left.length)) {
+        hidden = hidden.split(value).join("•••");
+      }
+      return redactValues(scrubLogs(hidden, names), values);
+    };
+    this.showConsole(`Google account ${account.email}`);
+    const enabled = await this.cli(root, "gcloud", ["services", "enable", "secretmanager.googleapis.com", "--project", project, "--quiet"], () => {}, 0, hide);
+    if (enabled !== 0) {
+      this.gcpStatus("Could not enable the Google API. The command is in the log. Copy it into a terminal if gcloud needs an answer.", "error");
+      return;
+    }
+    const failed: string[] = [];
+    const done: string[] = [];
+    let synced = 0;
+    for (const row of plan.ready) {
+      let described = "";
+      const exists = await this.cli(root, "gcloud", ["secrets", "describe", row.name, "--project", project, "--format=value(name)"], (text) => {
+        described += text;
+      }, 30000, hide);
+      if (exists !== 0) {
+        if (!/NOT_FOUND|not found/i.test(described)) {
+          failed.push(row.name);
+          continue;
+        }
+        const created = await this.cli(root, "gcloud", ["secrets", "create", row.name, "--replication-policy=automatic", "--project", project, "--quiet"], () => {}, 60000, hide);
+        if (created !== 0) {
+          failed.push(row.name);
+          continue;
+        }
+      }
+      const file = path.join(os.tmpdir(), `bigagent-secret-${process.pid}-${Date.now()}-${synced}`).replace(/\\/g, "/");
+      try {
+        fs.writeFileSync(file, row.value, { mode: 0o600 });
+        const added = await this.cli(root, "gcloud", ["secrets", "versions", "add", row.name, `--data-file=${file}`, "--project", project, "--quiet"], () => {}, 60000, hide);
+        if (added !== 0) failed.push(row.name);
+        else {
+          synced += 1;
+          done.push(row.name);
+        }
+      } finally {
+        fs.rmSync(file, { force: true });
+      }
+    }
+    if (done.length) this.panel?.webview.postMessage({ type: "gcp-secrets-cleared", names: done });
+    const summary = this.syncSummary(synced, failed, plan.missing);
+    this.gcpStatus(summary, synced > 0 && failed.length === 0 && plan.missing.length === 0 ? "ok" : "error");
+  }
+
+  private async deployGcp(root: string, link: import("./project").GcpLink): Promise<void> {
+    const project = loadProject(root);
+    const names = project.secrets.filter((row) => row.configured).map((row) => row.name);
+    this.gcpStatus("Checking the local image.", "working");
+    const imageId = await this.localImageId(root);
+    const built = cloudRunPlan({
+      agentName: project.name,
+      project: link.project,
+      region: link.region,
+      imageId: imageId || "",
+      exposure: link.exposure,
+      hasPublicChannel: hasPublicChannel(project),
+      secretNames: names,
+      minInstances: link.minInstances,
+      maxInstances: link.maxInstances,
+      concurrency: link.concurrency,
+      cpu: link.cpu,
+      memory: link.memory,
+      timeout: link.timeout,
+      env: link.env,
+    });
+    if ("error" in built) {
+      this.gcpStatus(built.error, "error");
+      return;
+    }
+    const values = link.env.map((row) => row.value);
+    const hide = (text: string) => redactValues(scrubLogs(text, names), values);
+    const short = shortImage(imageId || "");
+    this.gcpStatus("Checking the Google account.", "working");
+    const account = await this.googleAccount(root);
+    if ("error" in account) {
+      this.gcpStatus(account.error, "error");
+      return;
+    }
+    this.showConsole(`Google account ${account.email}`);
+    if (built.plan.warning) this.showConsole(built.plan.warning);
+    this.gcpStatus("Checking whether Cloud Run already runs this image.", "working");
+    const live = await this.liveRevision(root, built.plan.project, built.plan.region, built.plan.service);
+    const match = live.image ? await this.matchServing(root, built.plan.project, built.plan.region, built.plan.service, imageId || "", live.image) : "unknown";
+    const skipPush = match === "same";
+    if (skipPush) this.gcpStatus(`This image ${short} is already on Cloud Run. Applying the service settings.`, "working", live.url, "publish", short);
+    else if (match === "other") this.gcpStatus(`Cloud Run is serving another image. Publishing ${short}.`, "working", "", "push", short);
+    else if (live.failed) this.gcpStatus("Could not read the image Cloud Run is serving. Continuing.", "working", "", "unknown", short);
+    if (!skipPush) {
+    this.gcpStatus("Enabling Artifact Registry, Cloud Run, and Secret Manager.", "working");
+    const enabled = await this.cli(root, "gcloud", ["services", "enable", "artifactregistry.googleapis.com", "run.googleapis.com", "secretmanager.googleapis.com", "--project", built.plan.project, "--quiet"], () => {}, 0, hide);
+    if (enabled !== 0) {
+      this.gcpStatus("Could not enable the Google API. The command is in the log. Copy it into a terminal if gcloud needs an answer.", "error");
+      return;
+    }
+    const gcloud = (args: string[], timeout = 0) => this.cli(root, "gcloud", args, () => {}, timeout, hide);
+    this.gcpStatus("Checking the Artifact Registry repository.", "working");
+    const repo = await gcloud(["artifacts", "repositories", "describe", "bigagent", "--project", built.plan.project, "--location", built.plan.region], 30000);
+    if (repo !== 0) {
+      const created = await gcloud(["artifacts", "repositories", "create", "bigagent", "--repository-format=docker", "--location", built.plan.region, "--project", built.plan.project, "--quiet"], 90000);
+      if (created !== 0) {
+        this.gcpStatus("Could not create the Artifact Registry repository bigagent.", "error");
+        return;
+      }
+    }
+    this.gcpStatus("Letting Docker sign in to Artifact Registry.", "working");
+    const dockerAuth = await gcloud(["auth", "configure-docker", `${built.plan.region}-docker.pkg.dev`, "--quiet"], 30000);
+    if (dockerAuth !== 0) {
+      this.gcpStatus("Could not let Docker push to Artifact Registry.", "error");
+      return;
+    }
+    this.gcpStatus("Tagging the local image.", "working");
+    const tagged = await this.cli(root, "docker", ["tag", imageId || "", built.plan.image], () => {}, 20000, hide);
+    if (tagged !== 0) {
+      this.gcpStatus("The local image was not found. Start it on Local once, then deploy.", "error");
+      return;
+    }
+    this.gcpStatus("Pushing the image. This can take several minutes.", "working", "", "push");
+    let lastByte = Date.now();
+    const pushTimer = setInterval(() => {
+      const progress = pushProgress(this.ship.logs);
+      const ago = Math.max(0, Math.round((Date.now() - lastByte) / 1000));
+      const quiet = ago >= 20;
+      const detail = progress.detail ? ` ${progress.detail}` : "";
+      if (progress.done > 0 && progress.pending === 0) {
+        this.gcpStatus(quiet ? `Pushing the image. Every layer is in the registry. Docker has been quiet for ${ago}s.` : "Pushing the image. Every layer is in the registry. Waiting for Docker to finish.", "working", "", "push");
+      } else if (progress.pending > 0) {
+        this.gcpStatus(quiet ? `Pushing the image. ${progress.done} layers are already in the registry. ${progress.pending} have not moved for ${ago}s.${detail}` : `Pushing the image. ${progress.done} layers are already in the registry. ${progress.pending} are still going.${detail}`, "working", "", "push");
+      } else this.gcpStatus(`Still pushing the image. The last update was ${ago}s ago.`, "working", "", "push");
+    }, 10000);
+    let pushed = 1;
+    try {
+      pushed = await this.cli(root, "docker", ["push", built.plan.image], () => {
+        lastByte = Date.now();
+      }, 0, hide);
+    } finally {
+      clearInterval(pushTimer);
+    }
+    if (pushed !== 0) {
+      this.gcpStatus("The image did not upload. Check the Google account and the project.", "error");
+      return;
+    }
+    }
+    await this.allowSecretRead(root, built.plan.project, built.plan.secrets);
+    this.gcpStatus("Publishing the Cloud Run service.", "working", "", "publish");
+    let output = "";
+    const deployed = await this.cli(root, "gcloud", cloudRunArgs(built.plan), (text) => {
+      output += text;
+    }, 0, hide);
+    if (deployed !== 0) {
+      const reason = commandFailure(hide(output));
+      if (reason && !this.ship.logs.includes(reason.slice(0, 80))) this.showConsole(reason);
+      this.gcpStatus(reason ? `Cloud Run did not accept the service. ${reason}` : "Cloud Run printed nothing. The command is in the log.", "error");
+      return;
+    }
+    const url = output.match(/https:\/\/[a-z0-9.-]+\.run\.app/i)?.[0] || live.url || "";
+    if (url) writeGcpLink(root, { ...link, url });
+    this.publishGcpFace(root, imageId || "");
+    this.gcpStatus(url ? `Cloud Run is up to date with image ${short}. Live at ${url}.` : `Cloud Run is up to date with image ${short}.`, "ok", url, "current", short);
+  }
+
+  private async liveRevision(root: string, projectId: string, region: string, service: string): Promise<{ image: string; url: string; missing: boolean; failed: boolean }> {
+    let raw = "";
+    const code = await this.cli(root, "gcloud", ["run", "services", "describe", service, "--project", projectId, "--region", region, "--format", "json(status.url,status.traffic,status.latestReadyRevisionName,status.latestCreatedRevisionName,spec.template.spec.containers[0].image)"], (text) => {
+      raw += text;
+    }, 30000);
+    if (code !== 0) return { image: "", url: "", missing: serviceMissing(raw), failed: !serviceMissing(raw) };
+    const release = parseServiceRelease(raw);
+    if (!release) return { image: "", url: "", missing: false, failed: true };
+    if (!release.revision) return { image: "", url: release.url, missing: true, failed: false };
+    const tagged = releasedImage(release);
+    if (tagged) return { image: tagged, url: release.url, missing: false, failed: false };
+    let image = "";
+    const rev = await this.cli(root, "gcloud", ["run", "revisions", "describe", release.revision, "--project", projectId, "--region", region, "--format", "value(spec.containers[0].image)"], (text) => {
+      image += text;
+    }, 30000);
+    if (rev !== 0) return { image: "", url: release.url, missing: false, failed: true };
+    return { image: image.trim(), url: release.url, missing: false, failed: false };
+  }
+
+  private async matchServing(root: string, projectId: string, region: string, service: string, imageId: string, remoteImage: string): Promise<"same" | "other" | "unknown"> {
+    const direct = cloudRunImageMatch(imageId, remoteImage);
+    if (direct !== "unknown") return direct;
+    if (!/sha256:[a-f0-9]{64}/i.test(remoteImage)) return "unknown";
+    const tag = shortImage(imageId).slice("sha256:".length);
+    if (!tag) return "unknown";
+    let pinned = "";
+    const ref = `${region}-docker.pkg.dev/${projectId}/bigagent/${service}:${tag}`;
+    const code = await this.cli(root, "gcloud", ["artifacts", "docker", "images", "describe", ref, "--format", "value(image_summary.digest)"], (text) => {
+      pinned += text;
+    }, 30000);
+    if (code !== 0) return "unknown";
+    return cloudRunImageMatch(imageId, remoteImage, pinned);
+  }
+
+  private async showLiveImage(root: string, link: import("./project").GcpLink): Promise<void> {
+    this.gcpStatus("Checking whether Cloud Run already runs this image.", "working");
+    const imageId = await this.localImageId(root);
+    if (!imageId) {
+      this.gcpStatus("No local image yet. Build it here, then deploy.", "error");
+      return;
+    }
+    const short = shortImage(imageId);
+    const live = await this.liveRevision(root, link.project, link.region, imageName(loadProject(root).name));
+    this.publishGcpFace(root, imageId);
+    if (live.failed) {
+      this.gcpStatus("Could not read the image Cloud Run is serving.", "error", "", "unknown", short);
+      return;
+    }
+    if (live.missing || !live.image) {
+      this.gcpStatus("Cloud Run has no service yet.", "ok", live.url, "other", short);
+      return;
+    }
+    if (live.url) writeGcpLink(root, { ...link, url: live.url });
+    const match = await this.matchServing(root, link.project, link.region, imageName(loadProject(root).name), imageId, live.image);
+    if (match === "same") this.gcpStatus(live.url ? `Cloud Run is up to date with image ${short}. Live at ${live.url}.` : `Cloud Run is up to date with image ${short}.`, "ok", live.url, "current", short);
+    else if (match === "other") this.gcpStatus(`Cloud Run is serving another image. This one is ${short}.`, "ok", live.url, "other", short);
+    else this.gcpStatus("Could not read the image Cloud Run is serving.", "error", live.url, "unknown", short);
+  }
+
+  private async readServiceLogs(root: string, projectId: string, region: string): Promise<void> {
+    const service = imageName(loadProject(root).name);
+    const place = region || "us-central1";
+    this.gcpStatus("Reading the Cloud Run log.", "working");
+    let raw = "";
+    const code = await this.cli(root, "gcloud", [
+      "logging", "read",
+      monitorFilter(service, place),
+      "--project", projectId,
+      "--limit", "80",
+      "--freshness", "6h",
+      "--order", "desc",
+      "--format", "json",
+    ], (text) => { raw += text; }, 45000, () => "");
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    if (code !== 0) {
+      this.gcpStatus("Could not read the Cloud Run log.", "error");
+      return;
+    }
+    const entries = parseLogEntries(raw);
+    const signal = agentSignal(entries);
+    const facts = monitorFacts(entries);
+    const bars = channelBars(entries);
+    const measure = "latency";
+    const say = (line: string) => phrase(lang, line);
+    this.panel?.webview.postMessage({
+      type: "gcp-signal",
+      kind: signal.kind,
+      headline: say(signal.headline),
+      webhook: say(signal.webhook),
+      turn: say(signal.turn),
+      advice: say(signal.advice),
+      bars,
+      measure,
+      facts,
+    });
+    this.panel?.webview.postMessage({ type: "gcp-status", text: "", kind: "ok", face: false });
+  }
+
+  private async allowSecretRead(root: string, projectId: string, secrets: string[]): Promise<void> {
+    if (!secrets.length) return;
+    this.gcpStatus("Allowing Cloud Run to read its secrets.", "working");
+    let number = "";
+    const described = await this.cli(root, "gcloud", ["projects", "describe", projectId, "--format=value(projectNumber)"], (text) => {
+      number += text;
+    }, 30000);
+    const account = cloudRunRuntimeAccount(number.trim().split(/\s+/).find((part) => /^\d+$/.test(part)) || "");
+    if (described !== 0 || !account) {
+      this.showConsole("Could not find the Cloud Run service account. Continuing in case access was granted already.");
+      return;
+    }
+    for (const secret of secrets) {
+      this.gcpStatus(`Allowing Cloud Run to read ${secret}.`, "working");
+      const granted = await this.cli(root, "gcloud", secretAccessorArgs(projectId, secret, account), () => {}, 60000);
+      if (granted !== 0) this.showConsole(`Could not grant ${secret} to the Cloud Run account. Continuing in case it was granted already.`);
+    }
+  }
+
+  private async openEditorChat(root: string): Promise<void> {
+    const lang = readUi(this.context).lang === "es" ? "es" : "en";
+    const query = chatHandoff(loadProject(root), lang);
+    const commands = await vscode.commands.getCommands(true);
+    const command = ["workbench.action.chat.open", "workbench.action.chat.newChat", "composer.newAgentChat", "aichat.newchataction"].find((name) => commands.includes(name));
+    if (!command) {
+      this.render("This editor did not open its chat.");
+      return;
+    }
+    await vscode.commands.executeCommand(command, { query, isPartialQuery: true, mode: "agent" });
+  }
+
+  private async loadModels(): Promise<void> {
     const select = vscode.lm?.selectChatModels;
     if (!select) {
       this.lmModel = undefined;
-      this.lm = lmGate({ hasApi: false, modelCount: 0, replied: false });
-      this.render();
+      this.lm = { ...lmGate({ hasApi: false, modelCount: 0 }), models: [], modelId: "" };
       return;
     }
     try {
-      const models = await select({});
-      this.lmModel = models[0];
-      if (!models.length) {
-        this.lm = lmGate({ hasApi: true, modelCount: 0, replied: false });
-        this.render();
-        return;
-      }
-      const text = await this.askModel("Reply with the single word ready.", models[0]);
-      this.lm = lmGate({ hasApi: true, modelCount: models.length, replied: text.trim().length > 0 });
+      const found = await select({});
+      const models = found.map((model) => ({ id: model.id, name: model.name || model.id }));
+      const modelId = models.some((model) => model.id === this.lm.modelId) ? this.lm.modelId : models[0]?.id || "";
+      this.lmModel = found.find((model) => model.id === modelId);
+      const gate = lmGate({ hasApi: true, modelCount: models.length });
+      this.lm = { ...gate, models, modelId };
     } catch {
       this.lmModel = undefined;
-      this.lm = { ok: false, reason: "The editor model did not answer. Test again." };
+      this.lm = { ...lmGate({ hasApi: true, modelCount: 0 }), models: [], modelId: "" };
     }
-    this.render();
   }
 
   private async askLm(root: string, question: string): Promise<void> {
     const text = question.trim().slice(0, 2000);
-    if (!text || !this.lm.ok || !this.lmModel) return;
+    if (!text) return;
     this.askOpen = true;
+    if (!this.lmModel) await this.loadModels();
     this.ask = [...this.ask, { role: "you", text }].slice(-12);
-    const project = loadProject(root);
-    const missing = cardNeeds(project).flatMap((row) => row.missing);
-    const cards = [project.think ? project.name : "", ...project.items.map((item) => `${item.kind}:${item.name}`)].filter(Boolean);
-    const prompt = [
-      "You help finish an agent designed on a canvas. Answer in the same language as the question. Name the card and what to set. Do not invent a secret value.",
-      `Cards: ${cards.join(", ")}`,
-      missing.length ? `Missing:\n${missing.join("\n")}` : "The cards have the minimum configuration.",
-      `Question: ${text}`,
-    ].join("\n\n");
+    if (!this.lmModel) {
+      this.ask = [...this.ask, { role: "guide", text: this.lm.reason }].slice(-12);
+      this.render();
+      return;
+    }
+    const prompt = assistantContext(loadProject(root), text);
     try {
       const answer = (await this.askModel(prompt, this.lmModel)).trim();
-      this.ask = [...this.ask, { role: "guide", text: answer || "The editor model returned an empty answer." }].slice(-12);
+      const proposal = readProposal(answer);
+      const shown = replyWithoutProposal(answer);
+      this.ask = [...this.ask, { role: "guide", text: shown || (proposal ? proposalLabel(proposal) : "The editor model returned an empty answer."), proposal: proposal ?? undefined }].slice(-12);
     } catch {
-      this.lmModel = undefined;
-      this.lm = { ok: false, reason: "The editor model did not answer. Test again." };
+      this.ask = [...this.ask, { role: "guide", text: "The model did not answer. Check that you are signed in, then send again." }].slice(-12);
     }
     this.render();
   }
@@ -711,7 +1418,7 @@ class Home implements vscode.WebviewViewProvider {
     if (root && this.panel) this.follow(root);
     const savedUi = readUi(this.context);
     const lang = savedUi.lang === "es" ? "es" : "en";
-    const ui = { ...savedUi, notice: phrase(lang, this.holdNotice), helpOpen: this.helpOpen, askOpen: this.askOpen, lm: this.lm, ask: this.ask, secretFocus: this.secretFocus };
+    const ui = { ...savedUi, notice: phrase(lang, this.holdNotice), helpOpen: this.helpOpen, askOpen: this.askOpen, lm: this.lm, ask: this.ask, secretFocus: this.secretFocus, gcpNote: this.gcpNote, gcpVerdict: this.gcpVerdict || undefined, gcpTrail: this.gcpTrail };
     this.helpOpen = false;
     const project = root && isProject(root) ? loadProject(root) : null;
     const scan = root ? scanWorkspace(root) : undefined;
@@ -724,7 +1431,9 @@ class Home implements vscode.WebviewViewProvider {
       this.view.title = t(lang, "designer");
       this.view.webview.html = libraryHtml(project, ui, Boolean(root));
     }
-    if (this.panel) this.panel.webview.html = designerHtml(project, ui, Boolean(root), scan, suggested, layout, home, pulse, studio, this.ship);
+    const pin = root && isProject(root) ? readImagePin(root) : null;
+    const ship = { ...this.ship, image: this.ship.image || pin || "" };
+    if (this.panel) this.panel.webview.html = designerHtml(project, ui, Boolean(root), scan, suggested, layout, home, pulse, studio, ship);
   }
 
   private async onMessage(message: {
@@ -764,6 +1473,19 @@ class Home implements vscode.WebviewViewProvider {
     egress?: string[];
     verify?: boolean;
     url?: string;
+    project?: string;
+    region?: string;
+    exposure?: string;
+    target?: "local" | "gcp" | "aws" | "azure";
+    minInstances?: number;
+    maxInstances?: number;
+    concurrency?: number;
+    cpu?: string;
+    memory?: string;
+    timeout?: number;
+    env?: { name?: string; value?: string }[];
+    secretOverrides?: { name?: string; value?: string }[];
+    only?: string;
     phone?: string;
     route?: string;
     repo?: string;
@@ -830,9 +1552,7 @@ class Home implements vscode.WebviewViewProvider {
         return;
       }
       if (message.type === "task" && root) {
-        const existing = vscode.window.terminals.find((term) => term.name === "BigAgentCreator");
-        const term = existing ?? vscode.window.createTerminal({ name: "BigAgentCreator", cwd: root });
-        term.show();
+        const term = this.editorTerminal(root);
         term.sendText(message.task === "eval" ? "agent-sdk eval --dir ." : "agent-sdk validate --dir .");
         return;
       }
@@ -946,17 +1666,72 @@ class Home implements vscode.WebviewViewProvider {
         }
         return;
       }
-      if (message.type === "ask-open") {
-        this.askOpen = !this.askOpen;
-        this.render();
+      if (message.type === "open-chat" && root && isProject(root)) {
+        await this.openEditorChat(root);
         return;
       }
-      if (message.type === "lm-test") {
-        await this.probeLm();
+      if (message.type === "ship-target" && (message.target === "local" || message.target === "gcp" || message.target === "aws" || message.target === "azure")) {
+        await writeUi(this.context, { ...ui, shipTarget: message.target });
         return;
       }
-      if (message.type === "lm-ask" && root && isProject(root)) {
-        await this.askLm(root, String(message.text || ""));
+      if (message.type === "gcp-sync" && root && isProject(root)) {
+        await writeUi(this.context, { ...ui, shipTarget: "gcp" });
+        const overrides = Array.isArray(message.secretOverrides)
+          ? message.secretOverrides.flatMap((row: { name?: unknown; value?: unknown }) => {
+              if (!row || typeof row.name !== "string") return [];
+              return [{ name: row.name, value: typeof row.value === "string" ? row.value : "" }];
+            })
+          : [];
+        await this.syncGcpSecrets(root, String(message.project || ""), overrides, typeof message.only === "string" ? message.only : "");
+        return;
+      }
+      if (message.type === "gcp-logs" && root && isProject(root)) {
+        await writeUi(this.context, { ...ui, shipTarget: "gcp" });
+        await this.readServiceLogs(root, String(message.project || ""), String(message.region || ""));
+        return;
+      }
+      if (message.type === "gcp-build" && root && isProject(root)) {
+        await writeUi(this.context, { ...ui, shipTarget: "gcp" });
+        this.gcpStatus("Building the local image. The log shows each step.", "working");
+        await this.compose(root, ["compose", "up", "--build", "-d", "--force-recreate"], "building");
+        return;
+      }
+      if ((message.type === "gcp-check" || message.type === "gcp-deploy" || message.type === "gcp-live") && root && isProject(root)) {
+        await writeUi(this.context, { ...ui, shipTarget: "gcp" });
+        const parsed = parseGcpLink({
+          project: message.project,
+          region: message.region,
+          exposure: message.exposure,
+          minInstances: message.minInstances,
+          maxInstances: message.maxInstances,
+          concurrency: message.concurrency,
+          cpu: message.cpu,
+          memory: message.memory,
+          timeout: message.timeout,
+          env: Array.isArray(message.env) ? message.env : [],
+        });
+        if ("error" in parsed) {
+          this.gcpStatus(parsed.error, "error");
+          return;
+        }
+        const names = loadProject(root).secrets.filter((row) => row.configured).map((row) => row.name);
+        const clash = parsed.link.env.find((row) => names.includes(row.name));
+        if (clash) {
+          this.gcpStatus(`${clash.name} is a secret. Create it in Secret Manager. Do not put the value here.`, "error");
+          return;
+        }
+        writeGcpLink(root, parsed.link);
+        if (message.type === "gcp-check") {
+          this.gcpStatus("Checking the Google account.", "working");
+          const account = await this.googleAccount(root);
+          this.gcpStatus("error" in account ? account.error : `Signed in to Google as ${account.email}.`, "error" in account ? "error" : "ok");
+          return;
+        }
+        if (message.type === "gcp-live") {
+          await this.showLiveImage(root, parsed.link);
+          return;
+        }
+        await this.deployGcp(root, parsed.link);
         return;
       }
       if (message.type === "repair" && root && isProject(root)) {
@@ -996,6 +1771,24 @@ class Home implements vscode.WebviewViewProvider {
         return;
       }
       if (!root || !isProject(root)) return;
+      if (message.type === "apply-proposal") {
+        const index = Number(message.index);
+        const line = this.ask[index];
+        if (!line?.proposal || line.applied) return;
+        applyProposal(root, line.proposal);
+        this.ask[index] = { ...line, applied: true };
+        this.ask = [...this.ask, { role: "guide", text: "Saved on the canvas." }];
+        this.render("", true);
+        return;
+      }
+      if (message.type === "dismiss-proposal") {
+        const index = Number(message.index);
+        const line = this.ask[index];
+        if (!line?.proposal || line.applied) return;
+        this.ask[index] = { ...line, applied: true };
+        this.render();
+        return;
+      }
       if (message.type === "open-secret" && message.name) {
         this.secretFocus = String(message.name);
         await writeUi(this.context, { ...ui, mode: "secrets", notice: "" });
@@ -1017,6 +1810,11 @@ class Home implements vscode.WebviewViewProvider {
         }
         return;
       }
+      if (message.type === "ship" && message.task === "clear-log") {
+        this.ship = { ...this.ship, logs: "" };
+        this.panel?.webview.postMessage({ type: "ship-log", text: "", replace: true });
+        return;
+      }
       if (message.type === "ship") {
         if (message.task === "refresh") {
           this.shipGen += 1;
@@ -1026,8 +1824,8 @@ class Home implements vscode.WebviewViewProvider {
         }
         else if (message.task === "follow") this.followLogs(root);
         else if (message.task === "playground") await vscode.env.openExternal(vscode.Uri.parse("http://127.0.0.1:3000/playground"));
-        else if (message.task === "start") await this.compose(root, this.ship.republish ? ["compose", "up", "--build", "-d", "--force-recreate"] : ["compose", "up", "--build", "-d"], "building");
-        else if (message.task === "rebuild") await this.compose(root, ["compose", "up", "--build", "-d", "--force-recreate"], "rebuilding");
+        else if (message.task === "start") await this.compose(root, shipArgs("start", Boolean(readImagePin(root)), Boolean(this.ship.republish)), "building");
+        else if (message.task === "rebuild") await this.compose(root, shipArgs("rebuild", true, true), "rebuilding");
         else if (message.task === "stop") await this.compose(root, ["compose", "down"], "stopping");
         else if (message.task === "tunnel") await this.openTunnel();
         else if (message.task === "webhook") await this.registerWebhook(root, message.url || this.ship.publicUrl);
@@ -1049,7 +1847,7 @@ class Home implements vscode.WebviewViewProvider {
           maxRunningTurns: message.maxRunningTurns,
           egress: message.egress,
         });
-        this.render("", true);
+        this.saved();
         return;
       }
       if (message.type === "scope") {

@@ -9,9 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { designerHtml, type Ui } from "./designer";
+import { designerHtml, shipFace, type Ui } from "./designer";
 import { copy, phrase } from "./copy";
-import { arrange, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, composePortClosed, DOCKER_MISSING, dockerProblem, flowReport, lmGate, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, readLayout, readStudio, restoreFolder, restoreWorkspace, review, safeRelative, saveAgentSettings, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
+import { applyProposal, arrange, assistantContext, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, composePortClosed, DOCKER_MISSING, dockerProblem, flowReport, lmGate, readProposal, replyWithoutProposal, chatHandoff, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, webhookNeedsLocal, readLayout, readStudio, restoreFolder, restoreWorkspace, review, runSignals, redactValues, envState, imageName, languageChoice, cloudRunArgs, cloudRunPlan, cloudRunRuntimeAccount, secretAccessorArgs, agentSignal, parseLogEntries, channelBars, monitorFacts, monitorFilter, consoleAppend, pushProgress, windowsShell, pickGcloud, commandFailure, consoleCommand, formatCommand, gcpPreview, gcpChecks, cloudRunImageMatch, parseTrafficRevision, parseServiceRelease, releasedImage, serviceMissing, shortImage, composeImageId, secretSyncPlan, parseGcpLink, readGcpLink, writeGcpLink, parseEnv, parseImageId, readImagePin, safeRelative, saveAgentSettings, shipArgs, portHolder, mergeLogs, writeDocker, writeImagePin, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
 
 test("an agent folder keeps secrets out of the image", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
@@ -253,6 +253,11 @@ test("a telegram chat verifies the secret and answers in the same conversation",
   assert.match(channel, /x-telegram-bot-api-secret-token/);
   assert.match(channel, /continuationToken: `telegram:\$\{chatId\}`/);
   assert.match(channel, /replyTelegram/);
+  assert.match(channel, /replied in/);
+  const agent = fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8");
+  assert.match(agent, /cwd: "\/srv\/agent\/bot"/);
+  assert.equal(/sandbox:\s*true/.test(agent), false);
+  assert.match(fs.readFileSync(path.join(root, ".cursorignore"), "utf8"), /node_modules/);
   assert.match(reply, /sendMessage/);
   assert.match(reply, /slice\(0, 4000\)/);
   assert.equal(loadProject(root).secrets.some((row) => row.name === "TELEGRAM_BOT_TOKEN"), true);
@@ -374,6 +379,26 @@ test("a tunnel address becomes the telegram route and the token stays out of the
     assert.equal(target.body.includes("123456:ABC"), false);
   }
   assert.equal("error" in telegramSetWebhookTarget("123456:ABC", "has a colon:no", "https://name.trycloudflare.com"), true);
+  assert.equal(webhookNeedsLocal("https://bigagent-telegram-desk-olwhvzss2q-uc.a.run.app/v1/channels/telegram/"), false);
+  assert.equal(webhookNeedsLocal("https://name.trycloudflare.com/v1/channels/telegram/"), true);
+  const cloud = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  createProject(cloud, "Desk");
+  saveItem(cloud, { kind: "channel", name: "telegram", description: "telegram", body: "A person writes.", verify: true, route: "/", secret: "TELEGRAM_WEBHOOK_SECRET" });
+  setSecret(cloud, "TELEGRAM_WEBHOOK_SECRET", "mesa-local");
+  setSecret(cloud, "TELEGRAM_BOT_TOKEN", "123456:ABC");
+  fs.mkdirSync(path.join(cloud, ".bigagent"), { recursive: true });
+  fs.writeFileSync(path.join(cloud, ".bigagent", "gcp.json"), JSON.stringify({ project: "mistratos", region: "us-central1", url: "https://bigagent-telegram-desk-olwhvzss2q-uc.a.run.app" }), "utf8");
+  const stopped = { docker: "ready" as const, running: false, phase: "checking" as const, summary: "", logs: "", publicUrl: "" };
+  const ready = designerHtml(loadProject(cloud), { mode: "connect", selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 }, true, undefined, "", readLayout(cloud), readLayout(cloud), false, undefined, stopped);
+  assert.match(ready, /value="https:\/\/bigagent-telegram-desk-olwhvzss2q-uc\.a\.run\.app"/);
+  assert.match(ready, /https:\/\/bigagent-telegram-desk-olwhvzss2q-uc\.a\.run\.app\/v1\/channels\/telegram\//);
+  assert.equal(/id="public-url"[^>]*disabled/.test(ready), false);
+  assert.equal(/id="ship-webhook"[^>]*disabled/.test(ready), false);
+  assert.match(ready, /This agent has no WhatsApp channel/);
+  assert.match(ready, /data-connect-log="telegram"/);
+  assert.match(ready, /Nothing has been registered in this session yet/);
+  const told = designerHtml(loadProject(cloud), { mode: "connect", selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 }, true, undefined, "", readLayout(cloud), readLayout(cloud), false, undefined, { ...stopped, phase: "idle", summary: "Webhook registered. Telegram will call https://bigagent-telegram-desk-olwhvzss2q-uc.a.run.app/v1/channels/telegram/.", logs: "", channelLogs: { telegram: "Webhook registered. Telegram will call https://bigagent-telegram-desk-olwhvzss2q-uc.a.run.app/v1/channels/telegram/.\n" } });
+  assert.match(told, /Telegram will call https:\/\/bigagent-telegram-desk-olwhvzss2q-uc\.a\.run\.app\/v1\/channels\/telegram\//);
 });
 
 test("sandbox on the local image is named before a silent chat", () => {
@@ -417,6 +442,17 @@ test("limits and think can leave the canvas and a trigger can skip the model", (
 test("logs hide secret values", () => {
   assert.match(scrubLogs("TELEGRAM_BOT_TOKEN=123456:abc", ["TELEGRAM_BOT_TOKEN"]), /TELEGRAM_BOT_TOKEN=•••/);
   assert.equal(scrubLogs("bot 123456789:AAHdefghijklmnopQRST", []).includes("123456789:"), false);
+  const bank = parseEnv("CURSOR_API_KEY=desk-key-value\nTELEGRAM_BOT_TOKEN=\n# note\nTELEGRAM_WEBHOOK_SECRET=desk-hook-value\n");
+  assert.deepEqual(envState(bank, ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"]), [
+    { name: "CURSOR_API_KEY", present: true },
+    { name: "TELEGRAM_BOT_TOKEN", present: false },
+    { name: "TELEGRAM_WEBHOOK_SECRET", present: true },
+  ]);
+  const shown = redactValues("log desk-key-value and desk-hook-value", ["desk-key-value", "desk-hook-value"]);
+  assert.equal(shown.includes("desk-key-value"), false);
+  assert.equal(shown.includes("desk-hook-value"), false);
+  const live = fs.readFileSync(path.join(process.cwd(), "scripts", "live-telegram.ts"), "utf8");
+  assert.equal(live.includes("setWebhook"), false);
 });
 
 test("a copy name skips names already on the canvas", () => {
@@ -604,6 +640,8 @@ test("every component and every trigger option can be finished from its card", (
   const agent = fresh("Desk");
   const agentCard = card(agent, "agent");
   for (const id of ["model", "effort", "fast", "sandbox", "instructions", "save-agent"]) assert.match(agentCard, new RegExp(`id="${id}"`), id);
+  assert.match(agentCard, /class="row savebar"/);
+  assert.match(agentCard, /Saving…/);
   const limitsCard = card(agent, "scope");
   assert.match(limitsCard, /id="scope"/);
   assert.match(limitsCard, /id="save-scope"/);
@@ -831,10 +869,33 @@ test("a person can go from an empty folder through the canvas to ship", () => {
   assert.equal(/id="ship-start"[^>]*disabled/.test(stopped), false);
   assert.match(stopped, /id="open-playground"[^>]*disabled/);
   assert.match(stopped, /id="ship-stop"[^>]*disabled/);
-  assert.match(stopped, /AWS/);
+  assert.match(stopped, /data-target="local"/);
+  assert.match(stopped, /data-target="gcp"/);
+  assert.match(stopped, /data-ship-panel="gcp" hidden/);
+  assert.match(stopped, /data-gcp-tab="status"/);
+  assert.match(stopped, /class="ship-local"/);
+  assert.match(stopped, /id="fold-status"/);
+  assert.match(stopped, /id="fold-log"/);
+  assert.match(stopped, /id="fold-gcp-top"/);
+  assert.match(stopped, /id="fold-gcp-bottom"/);
+  assert.match(stopped, /\.ship-stack\.fold-top \.cloud-bottom \{ flex: 1; height: auto; min-height: 0; \}/);
+  assert.match(stopped, /Uploading…/);
+  assert.match(stopped, /id="gcp-deploy-pane"/);
+  assert.match(stopped, /id="gcp-sync"/);
+  assert.match(stopped, /data-sync-one="CURSOR_API_KEY"/);
+  assert.match(stopped, /data-gcp-secret="CURSOR_API_KEY"/);
+  assert.match(stopped, /Sync secrets/);
+  assert.match(stopped, /Uses the local value/);
+  assert.equal(stopped.includes("not-in-the-image"), false);
+  assert.match(stopped, /id="gcp-refresh"/);
+  assert.match(stopped, /id="gcp-verdict"/);
+  assert.match(stopped, /id="gcp-trail"/);
+  assert.match(stopped, /\.verdict\.current \{ color: #052e16; background: #22C55E; \}/);
+  assert.match(stopped, /#gcp-status\.same \{ color: #22C55E/);
+  assert.match(stopped, /id="gcp-log"/);
   assert.match(stopped, /Optional on this machine/);
   assert.equal(stopped.includes("AGENT_SDK_BEARER_TOKEN is empty"), false);
-  assert.match(stopped, /<details class="ship-more">/);
+  assert.equal(stopped.includes("Kubernetes"), false);
   assert.match(stopped, /id="rewrite-docker"/);
   assert.equal(stopped.includes('id="ship-aws"'), false);
   const running = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, { docker: "ready", running: true, phase: "idle", summary: "Listening on http://127.0.0.1:3000.", logs: "2026-11-07T20:00:00.000Z info ready", publicUrl: "", stats: { cpu: "1.2%", memory: "40MiB / 1GiB", healthMs: 12 } });
@@ -901,12 +962,14 @@ test("a blank folder offers each example, and the canvas names what a flow still
   const secretsPage = designerHtml(project, { ...page, mode: "secrets", secretFocus: "CURSOR_API_KEY" }, true, undefined, "", layout, layout);
   assert.match(secretsPage, /id="secret-name" value="CURSOR_API_KEY"/);
   assert.match(secretsPage, /Type the value for CURSOR_API_KEY/);
-  assert.match(canvas, /id="lm-test"/);
-  assert.match(canvas, /id="ask-text"[^>]*disabled/);
+  assert.match(canvas, /id="ask-open" class="assistant"/);
+  assert.match(canvas, /Assistant<\/button>/);
+  assert.equal(/id="lm-test"/.test(canvas), false);
+  assert.equal(/id="ask-text"[^>]*disabled/.test(canvas), false);
   const spanish = designerHtml(project, { ...page, lang: "es" }, true, undefined, "", layout, layout);
   assert.match(spanish, /Simular flujo/);
   assert.match(spanish, /CURSOR_API_KEY está vacío/);
-  assert.match(spanish, /Probar comunicación/);
+  assert.match(spanish, /Asistente<\/button>/);
 
   saveScope(root, "Refuse refunds.");
   setSecret(root, "CURSOR_API_KEY", "not-a-real-key");
@@ -953,14 +1016,15 @@ test("a blank folder offers each example, and the canvas names what a flow still
   assert.match(shipEs, /Falta Docker/);
   assert.match(shipEs, /Instala Docker/);
 
-  assert.equal(lmGate({ hasApi: false, modelCount: 0, replied: false }).ok, false);
-  assert.equal(lmGate({ hasApi: true, modelCount: 0, replied: false }).ok, false);
-  assert.equal(lmGate({ hasApi: true, modelCount: 1, replied: false }).ok, false);
-  const open = lmGate({ hasApi: true, modelCount: 1, replied: true });
+  assert.equal(lmGate({ hasApi: false, modelCount: 0 }).ok, false);
+  assert.equal(lmGate({ hasApi: true, modelCount: 0 }).ok, false);
+  const open = lmGate({ hasApi: true, modelCount: 2 });
   assert.equal(open.ok, true);
-  const ask = designerHtml(readyProject, { ...page, askOpen: true, lm: open }, true, undefined, "", layout, layout);
+  const ask = designerHtml(readyProject, { ...page, askOpen: true, lm: { ...open, models: [{ id: "grok", name: "Grok" }, { id: "composer", name: "Composer" }], modelId: "composer" } }, true, undefined, "", layout, layout);
   assert.equal(/id="ask-text"[^>]*disabled/.test(ask), false);
-  assert.match(ask, /The editor model answered/);
+  assert.equal(/id="lm-test"/.test(ask), false);
+  assert.equal(/id="ask-form"/.test(ask), false);
+  assert.match(ask, /id="ask-open"/);
 });
 
 test("each example is servable and only owes secrets the person must set", () => {
@@ -998,6 +1062,474 @@ test("each example is servable and only owes secrets the person must set", () =>
     assert.match(html, /This flow cannot run yet/);
     assert.match(html, /Set these in Secrets/);
   }
+});
+
+test("a canvas change is saved only when the proposal is applied", () => {
+  const reply = "Add lookup.\n```proposal\n{\"kind\":\"tool\",\"name\":\"lookup\",\"description\":\"Find\",\"calls\":\"mcp:knowledge\",\"effect\":\"read\"}\n```";
+  const proposal = readProposal(reply);
+  assert.equal(proposal && proposal.kind === "tool" && proposal.name, "lookup");
+  assert.equal(replyWithoutProposal(reply), "Add lookup.");
+  assert.equal(readProposal("```proposal\n{\"kind\":\"tool\",\"name\":\"lookup\",\"value\":\"not-a-real-key\"}\n```"), null);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  initWorkspace(root, "Desk");
+  assert.equal(fs.existsSync(path.join(root, "tools", "lookup.json")), false);
+  applyProposal(root, proposal!);
+  const saved = fs.readFileSync(path.join(root, "tools", "lookup.json"), "utf8");
+  assert.match(saved, /mcp:knowledge/);
+  assert.equal(saved.includes("not-a-real-key"), false);
+  const handoff = chatHandoff(loadProject(root));
+  assert.match(handoff, /canvas reloads when files change/);
+  assert.match(handoff, /agent:Desk/);
+  assert.equal(handoff.includes("not-a-real-key"), false);
+  assert.equal(handoff.includes("Do not write files"), false);
+  const spanish = chatHandoff(loadProject(root), "es");
+  assert.match(spanish, /El lienzo se actualiza cuando cambian los archivos/);
+  assert.match(spanish, /Tarjetas: agent:Desk/);
+  assert.equal(spanish.includes("not-a-real-key"), false);
+  assert.equal(languageChoice(undefined, "es-CO"), "es");
+  assert.equal(languageChoice(undefined, "en-US"), "en");
+  assert.equal(languageChoice("en", "es-CO"), "en");
+  assert.equal(languageChoice("es", "en-US"), "es");
+  const id = `sha256:${"ab".repeat(32)}`;
+  const internet = cloudRunPlan({ agentName: "Telegram desk", project: "my-project", region: "us-central1", imageId: id, exposure: "internet", hasPublicChannel: true, secretNames: ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN"] });
+  assert.equal("error" in internet, false);
+  if ("error" in internet) return;
+  const args = cloudRunArgs(internet.plan).join(" ");
+  assert.match(args, /--ingress all/);
+  assert.match(args, /--allow-unauthenticated/);
+  assert.match(args, /--min-instances 1/);
+  assert.match(args, /CURSOR_API_KEY=CURSOR_API_KEY:latest/);
+  assert.equal(args.includes("not-a-real-key"), false);
+  assert.equal(args.includes("BIGAGENT_ADMIT_LOCAL"), false);
+  const account = cloudRunRuntimeAccount("405804269877");
+  assert.equal(account, "405804269877-compute@developer.gserviceaccount.com");
+  assert.equal(cloudRunRuntimeAccount("not-a-number"), "");
+  const grant = secretAccessorArgs("mistratos", "TELEGRAM_WEBHOOK_SECRET", account).join(" ");
+  assert.match(grant, /secrets add-iam-policy-binding TELEGRAM_WEBHOOK_SECRET/);
+  assert.match(grant, /roles\/secretmanager\.secretAccessor/);
+  assert.match(grant, /serviceAccount:405804269877-compute@developer\.gserviceaccount\.com/);
+  assert.equal(grant.includes("not-a-real-key"), false);
+  assert.match(phrase("es", "Could not grant TELEGRAM_WEBHOOK_SECRET to the Cloud Run account. Continuing in case it was granted already."), /Se continúa/);
+  const internal = cloudRunPlan({ agentName: "Telegram desk", project: "my-project", region: "us-central1", imageId: id, exposure: "internal", hasPublicChannel: true, secretNames: [] });
+  if ("error" in internal) throw new Error(internal.error);
+  assert.equal(internal.plan.ingress, "internal");
+  assert.equal(internal.plan.allowUnauthenticated, false);
+  assert.match(internal.plan.warning, /public internet/);
+  assert.equal("error" in cloudRunPlan({ agentName: "Desk", project: "Bad_Project", region: "us-central1", imageId: id, exposure: "internet", hasPublicChannel: false, secretNames: [] }), true);
+  assert.match(args, /--cpu 1/);
+  assert.match(args, /--memory 1Gi/);
+  assert.equal(args.includes("--set-env-vars"), false);
+});
+
+test("a person configures Cloud Run on the GCP tab and the result stays there", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-gcp-"));
+  const example = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../examples/telegram-desk");
+  loadExample(example, root);
+  setSecret(root, "CURSOR_API_KEY", "not-a-real-key");
+  const project = loadProject(root);
+  const layout = readLayout(root);
+  const page = { mode: "deploy" as const, selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+  const ship = { docker: "ready" as const, running: false, phase: "idle" as const, summary: "", logs: "", publicUrl: "" };
+  const opened = designerHtml(project, page, true, undefined, "", layout, layout, false, undefined, ship);
+  assert.match(opened, /data-ship-panel="gcp" hidden/);
+  assert.match(opened, /data-ship-panel="local"/);
+  assert.equal(/data-ship-panel="local" hidden/.test(opened), false);
+  assert.match(opened, /id="gcp-min"[^>]*value="1"/);
+  assert.match(opened, /id="gcp-max"/);
+  assert.match(opened, /id="gcp-concurrency"/);
+  assert.match(opened, /id="gcp-cpu"/);
+  assert.match(opened, /id="gcp-memory"/);
+  assert.match(opened, /id="gcp-timeout"/);
+  assert.match(opened, /id="gcp-env-add"/);
+  assert.match(opened, /data-gcp-tab="scale"/);
+  assert.match(opened, /data-gcp-pane="scale" hidden/);
+  assert.match(opened, /data-gcp-tab="monitor"/);
+  assert.match(opened, /id="gcp-logs"/);
+  assert.match(opened, /id="gcp-signal-headline"/);
+  const incident = agentSignal([{
+    timestamp: "2026-11-15T02:28:34.176510Z",
+    httpRequest: { status: 200, requestUrl: "https://bigagent-telegram-desk-olwhvzss2q-uc.a.run.app/v1/channels/telegram/" },
+  }, {
+    timestamp: "2026-11-15T02:30:46.892784Z",
+    textPayload: "[telegram] turn failed: turn interrupted",
+  }]);
+  assert.match(incident.headline, /reply was not sent/);
+  assert.equal(incident.kind, "error");
+  assert.match(incident.advice, /not a CPU/);
+  assert.match(agentSignal([{ timestamp: "2026-11-15T02:00:00Z", httpRequest: { status: 401, requestUrl: "https://example.run.app/v1/channels/telegram/" } }]).headline, /rejected/);
+  assert.match(agentSignal([]).headline, /No channel call/);
+  const bars = channelBars([{ timestamp: "2026-11-15T02:28:34.176510Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.014s" } }, { timestamp: "2026-11-15T02:29:05.736676Z", httpRequest: { status: 401, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "12ms" } }]);
+  assert.equal(bars.length, 2);
+  assert.equal(bars[0].ok, true);
+  assert.equal(bars[1].ok, false);
+  assert.equal(bars[0].kind, "accept");
+  const waited = channelBars([
+    { timestamp: "2026-11-15T02:28:34.000Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.016s" } },
+    { timestamp: "2026-11-15T02:30:46.000Z", textPayload: "[telegram] turn failed: turn interrupted" },
+    { timestamp: "2026-11-15T02:31:10.000Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.020s" } },
+    { timestamp: "2026-11-15T02:31:22.000Z", textPayload: "[telegram] replied in 12000ms" },
+  ]);
+  assert.equal(waited[1].kind, "accept");
+  assert.equal(waited[1].ms, 20);
+  const live = monitorFacts([
+    { timestamp: "2026-11-15T03:09:28.126Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.016s" } },
+    { timestamp: "2026-11-15T03:09:28.161Z", textPayload: "LocalCursorRulesService load completed meta={durationMs: 18063, ruleCount: 0}" },
+    { timestamp: "2026-11-15T03:10:01.060Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.007s" } },
+    { timestamp: "2026-11-15T03:10:01.075Z", textPayload: "[telegram] turn failed: turn interrupted" },
+    { timestamp: "2026-11-15T03:10:01.139Z", textPayload: "[telegram] turn failed: turn interrupted" },
+    { timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.015s" } },
+  ]);
+  assert.equal(live.calls, 3);
+  assert.equal(live.accepted, 3);
+  assert.equal(live.interrupted, 1);
+  assert.equal(live.prepMs, 18063);
+  assert.equal(live.replyMedianMs, 0);
+  const split = monitorFacts([
+    { timestamp: "2026-11-15T03:09:28.126Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.016s" } },
+    { timestamp: "2026-11-15T03:09:28.161Z", textPayload: "LocalCursorRulesService load completed meta={durationMs: 18063, ruleCount: 0}" },
+    { timestamp: "2026-11-15T03:09:48.000Z", textPayload: "[telegram] replied in 20000ms" },
+  ]);
+  assert.equal(split.replyMedianMs, 20000);
+  assert.equal(split.prepMs, 18063);
+  assert.equal(split.modelMedianMs, 1937);
+  assert.equal(split.acceptMedianMs, 16);
+  assert.equal(split.acceptP95Ms, 16);
+  const rules = channelBars([
+    { timestamp: "2026-11-15T03:09:28.126Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.016s" } },
+    { timestamp: "2026-11-15T03:09:28.161Z", textPayload: "LocalCursorRulesService load completed meta={durationMs: 18063, ruleCount: 0}" },
+  ]);
+  assert.equal(rules[0].kind, "accept");
+  assert.equal(rules[0].ms, 16);
+  assert.match(monitorFilter("bigagent-telegram-desk", "us-central1"), /replied in/);
+  assert.match(monitorFilter("bigagent-telegram-desk", "us-central1"), /durationMs/);
+  assert.equal(monitorFilter("bigagent-telegram-desk", "us-central1").includes("not-a-real-key"), false);
+  assert.match(agentSignal([{ timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.015s" } }]).headline, /agent is answering/);
+  assert.ok(bars[0].ms > 10 && bars[0].ms < 20);
+  assert.equal(parseLogEntries("noise [{\"timestamp\":\"2026-11-15T02:00:00Z\",\"textPayload\":\"[telegram] turn failed: turn interrupted\"}] tail").length, 1);
+  assert.match(opened, /data-gcp-pane="status"/);
+  assert.equal(/data-gcp-pane="status" hidden/.test(opened), false);
+  assert.match(opened, /data-gcp-pane="place" hidden/);
+  assert.match(opened, /id="gcp-chart"/);
+  assert.match(opened, /id="gcp-every"/);
+  assert.match(opened, /value="30" selected/);
+  assert.equal(opened.includes("One image. Four places."), false);
+  assert.equal(opened.includes("Local runs on this machine."), false);
+  assert.match(opened, /Secret Manager/);
+  assert.match(opened, /TELEGRAM_BOT_TOKEN/);
+  assert.equal(opened.includes("not-a-real-key"), false);
+
+  const stayed = designerHtml(project, { ...page, shipTarget: "gcp", gcpNote: "Checking the Google account." }, true, undefined, "", layout, layout, false, undefined, ship);
+  assert.match(stayed, /data-ship-panel="local" hidden/);
+  assert.equal(/data-ship-panel="gcp" hidden/.test(stayed), false);
+  assert.match(stayed, /data-target="gcp"[^>]*class="on"|class="on"[^>]*data-target="gcp"/);
+  assert.match(stayed, /Checking the Google account/);
+  const spanish = designerHtml(project, { ...page, lang: "es", shipTarget: "gcp" }, true, undefined, "", layout, layout, false, undefined, ship);
+  assert.match(spanish, /Instancias mínimas/);
+  assert.match(spanish, /Actualizar/);
+  assert.match(spanish, /Latencia/);
+  assert.match(spanish, /Preparación/);
+  assert.match(spanish, /Variables de entorno planas/);
+  assert.equal(/data-ship-panel="gcp" hidden/.test(spanish), false);
+
+  const typed = parseGcpLink({
+    project: "my-project",
+    region: "us-central1",
+    exposure: "internet",
+    minInstances: 1,
+    maxInstances: 2,
+    concurrency: 2,
+    cpu: "2",
+    memory: "2Gi",
+    timeout: 600,
+    env: [{ name: "LOG_LEVEL", value: "info" }, { name: "", value: "" }],
+  });
+  if ("error" in typed) throw new Error(typed.error);
+  writeGcpLink(root, typed.link);
+  const saved = readGcpLink(root);
+  assert.equal(saved.minInstances, 1);
+  assert.equal(saved.maxInstances, 2);
+  assert.equal(saved.cpu, "2");
+  assert.equal(saved.memory, "2Gi");
+  assert.equal(saved.timeout, 600);
+  assert.deepEqual(saved.env, [{ name: "LOG_LEVEL", value: "info" }]);
+  assert.equal(fs.readFileSync(path.join(root, ".bigagent", "gcp.json"), "utf8").includes("not-a-real-key"), false);
+
+  const id = `sha256:${"cd".repeat(32)}`;
+  const plan = cloudRunPlan({
+    agentName: project.name,
+    project: typed.link.project,
+    region: typed.link.region,
+    imageId: id,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN"],
+    minInstances: typed.link.minInstances,
+    maxInstances: typed.link.maxInstances,
+    concurrency: typed.link.concurrency,
+    cpu: typed.link.cpu,
+    memory: typed.link.memory,
+    timeout: typed.link.timeout,
+    env: typed.link.env,
+  });
+  if ("error" in plan) throw new Error(plan.error);
+  const args = cloudRunArgs(plan.plan).join(" ");
+  assert.match(args, /--min-instances 1/);
+  assert.match(args, /--max-instances 2/);
+  assert.match(args, /--update-annotations run\.googleapis\.com\/minScale=1,run\.googleapis\.com\/maxScale=2/);
+  assert.match(args, /--concurrency 2/);
+  assert.match(args, /--cpu 2/);
+  assert.match(args, /--memory 2Gi/);
+  assert.match(args, /--timeout 600/);
+  assert.match(args, /--set-env-vars LOG_LEVEL=info/);
+  assert.match(args, /TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest/);
+  assert.equal(args.includes("BIGAGENT_ADMIT_LOCAL"), false);
+  assert.equal(args.includes("not-a-real-key"), false);
+
+  const secretEnv = cloudRunPlan({
+    agentName: project.name,
+    project: "my-project",
+    region: "us-central1",
+    imageId: id,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: ["CURSOR_API_KEY"],
+    minInstances: 1,
+    maxInstances: 2,
+    concurrency: 2,
+    cpu: "1",
+    memory: "1Gi",
+    timeout: 300,
+    env: [{ name: "CURSOR_API_KEY", value: "not-a-real-key" }],
+  });
+  assert.equal("error" in secretEnv, true);
+  if (!("error" in secretEnv)) return;
+  assert.match(secretEnv.error, /Secret Manager/);
+  assert.equal(secretEnv.error.includes("not-a-real-key"), false);
+  assert.match(phrase("es", secretEnv.error), /Secret Manager/);
+  const sync = secretSyncPlan(
+    ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN", "WHATSAPP_TOKEN"],
+    [{ name: "CURSOR_API_KEY", value: " cloud-only " }, { name: "TELEGRAM_BOT_TOKEN", value: "   " }],
+    { CURSOR_API_KEY: "local-key", TELEGRAM_BOT_TOKEN: "local-telegram", WHATSAPP_TOKEN: "" },
+  );
+  assert.deepEqual(sync.ready.map((row) => ({ name: row.name, value: row.value, source: row.source })), [
+    { name: "CURSOR_API_KEY", value: "cloud-only", source: "environment" },
+    { name: "TELEGRAM_BOT_TOKEN", value: "local-telegram", source: "local" },
+  ]);
+  assert.deepEqual(sync.missing, ["WHATSAPP_TOKEN"]);
+  assert.equal(secretSyncPlan(["CURSOR_API_KEY"], [{ name: "OTHER", value: "nope" }], {}).missing[0], "CURSOR_API_KEY");
+  assert.match(phrase("es", "Synced 2 to Secret Manager. Could not sync WHATSAPP_TOKEN. It has no local value."), /Se sincronizaron 2 secretos/);
+  assert.match(phrase("es", "Could not sync CURSOR_API_KEY. It has no local value."), /No se pudo sincronizar CURSOR_API_KEY/);
+  assert.equal(formatCommand("gcloud", ["secrets", "versions", "add", "CURSOR_API_KEY", "--data-file=C:\\temp\\secret", "--quiet"]), "$ gcloud secrets versions add CURSOR_API_KEY \"--data-file=C:\\temp\\secret\" --quiet");
+  assert.match(formatCommand("docker", ["compose", "up", "--build"]), /\$ docker compose up --build/);
+  const pasted = consoleCommand("gcloud", ["services", "enable", "secretmanager.googleapis.com", "--project", "mistratos"], "win32");
+  assert.equal(pasted, "$ gcloud.cmd services enable secretmanager.googleapis.com --project mistratos");
+  assert.equal(pasted.includes("Start-Transcript"), false);
+  assert.equal(pasted.includes("not-a-real-key"), false);
+  const missingImage = gcpPreview({ agentName: "Telegram desk", imageId: null, project: "mistratos", region: "us-central1" });
+  assert.equal(missingImage.state, "need-image");
+  assert.match(missingImage.summary, /Local first/);
+  const pinned = `sha256:${"ab".repeat(32)}`;
+  const ready = gcpPreview({ agentName: "Telegram desk", imageId: pinned, project: "mistratos", region: "us-central1" });
+  assert.equal(ready.state, "ready");
+  assert.match(ready.image, /sha256:abababababab/);
+  assert.match(ready.target, /us-central1-docker\.pkg\.dev\/mistratos\/bigagent\/bigagent-telegram-desk:abababababab/);
+  const published = gcpPreview({ agentName: "Telegram desk", imageId: pinned, project: "mistratos", region: "us-central1", url: "https://desk-abc.run.app" });
+  assert.equal(published.state, "published");
+  assert.equal(published.url, "https://desk-abc.run.app");
+  const before = gcpChecks({ imageId: null, project: "", region: "bad", secrets: [{ name: "CURSOR_API_KEY", configured: false }] });
+  assert.equal(before.filter((row) => row.ok).length, 0);
+  assert.match(before[0].text, /Build it here/);
+  const after = gcpChecks({ imageId: pinned, project: "mistratos", region: "us-central1", secrets: [{ name: "CURSOR_API_KEY", configured: true }] });
+  assert.equal(after.every((row) => row.ok), true);
+  const found = composeImageId(`[{"ID":"sha256:${"e8".repeat(32)}","Repository":"prueba-2-agent"}]`);
+  assert.equal(found, `sha256:${"e8".repeat(32)}`);
+  let pushed = consoleAppend("", "The push refers to repository [desk]\n");
+  pushed = consoleAppend(pushed, "2135c70dc831: Preparing\r");
+  pushed = consoleAppend(pushed, "2135c70dc831: Pushing 12MB/80MB\r");
+  pushed = consoleAppend(pushed, "1162e6817b10: Waiting\n");
+  assert.match(pushed, /Pushing 12MB\/80MB/);
+  assert.equal(pushed.includes("Preparing"), false);
+  assert.match(pushed, /1162e6817b10: Waiting/);
+  const kept = consoleAppend("$ gcloud.cmd run deploy desk\n", "\rDeploying...\rERROR: (gcloud.run.deploy) Permission denied on the secret\r");
+  assert.match(kept, /\$ gcloud\.cmd run deploy desk/);
+  assert.match(kept, /Permission denied on the secret/);
+  assert.match(commandFailure("\rDeploying...\rERROR: (gcloud.run.deploy) Permission denied on the secret\r"), /Permission denied/);
+  const layers = pushProgress("2135c70dc831: Layer already exists\ndafb8aed9f7f: Preparing\n");
+  assert.equal(layers.done, 1);
+  assert.equal(layers.pending, 1);
+  assert.match(layers.detail, /dafb8aed9f7f: Preparing/);
+  const sdk = "C:\\Program Files (x86)\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd";
+  assert.equal(pickGcloud(`${sdk}\r\n`), sdk);
+  assert.equal(pickGcloud("gcloud.cmd\r\n"), "");
+  const shell = windowsShell(sdk, ["run", "deploy", "desk", "--set-secrets", "CURSOR_API_KEY=CURSOR_API_KEY:latest"], "C:\\temp\\gcloud.log");
+  assert.match(shell, /"C:\\Program Files \(x86\)\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud\.cmd"/);
+  assert.match(shell, /2>&1/);
+  assert.equal(shell.includes("not-a-real-key"), false);
+  assert.match(commandFailure("ok\nERROR: (gcloud.run.deploy) Secret CURSOR_API_KEY was not found\n"), /was not found/);
+  assert.match(phrase("es", "Cloud Run did not accept the service. ERROR: Secret was not found"), /no aceptó el servicio/);
+  assert.match(phrase("es", "Pushing the image. 9 layers are already in the registry. 2 have not moved for 40s. abcdef012345: Preparing"), /no se mueven desde hace 40 s/);
+  assert.match(phrase("es", "Pushing the image. Every layer is in the registry. Docker has been quiet for 40s."), /no escribe desde hace 40 s/);
+  const localId = `sha256:${"ab".repeat(32)}`;
+  assert.equal(shortImage(localId), "sha256:abababababab");
+  assert.equal(cloudRunImageMatch(localId, "us-central1-docker.pkg.dev/mistratos/bigagent/desk:abababababab"), "same");
+  assert.equal(cloudRunImageMatch(localId, "us-central1-docker.pkg.dev/mistratos/bigagent/desk:ffffffffffff"), "other");
+  assert.equal(cloudRunImageMatch(localId, "us-central1-docker.pkg.dev/mistratos/bigagent/desk@sha256:" + "cd".repeat(32)), "unknown");
+  assert.equal(cloudRunImageMatch(localId, "us-central1-docker.pkg.dev/mistratos/bigagent/desk@sha256:" + "cd".repeat(32), "sha256:" + "cd".repeat(32)), "same");
+  assert.equal(cloudRunImageMatch(localId, "us-central1-docker.pkg.dev/mistratos/bigagent/desk@sha256:" + "cd".repeat(32), "sha256:" + "ef".repeat(32)), "other");
+  const release = parseServiceRelease('{"spec":{"template":{"spec":{"containers":[{"image":"us-central1-docker.pkg.dev/mistratos/bigagent/desk:abababababab"}]}}},"status":{"latestCreatedRevisionName":"desk-00007","latestReadyRevisionName":"desk-00007","traffic":[{"revisionName":"desk-00007","percent":100}],"url":"https://desk-abc.run.app"}}');
+  assert.equal(release?.image, "us-central1-docker.pkg.dev/mistratos/bigagent/desk:abababababab");
+  assert.equal(releasedImage(release || { url: "", revision: "", ready: "", created: "", image: "" }), "us-central1-docker.pkg.dev/mistratos/bigagent/desk:abababababab");
+  assert.equal(releasedImage({ url: "", revision: "desk-00004", ready: "desk-00004", created: "desk-00007", image: "us-central1-docker.pkg.dev/mistratos/bigagent/desk:ffffffffffff" }), "");
+  assert.equal(serviceMissing("ERROR: (gcloud.run.services.describe) Resource was not found"), true);
+  const traffic = parseTrafficRevision('{"status":{"url":"https://desk-abc.run.app","traffic":[{"revisionName":"desk-00001","percent":0},{"revisionName":"desk-00004","percent":100}]}}');
+  assert.equal(traffic?.revision, "desk-00004");
+  assert.equal(traffic?.url, "https://desk-abc.run.app");
+  assert.match(phrase("es", "Cloud Run is up to date with image sha256:abababababab. Live at https://desk-abc.run.app."), /ya está actualizado con la imagen sha256:abababababab/);
+
+  const admit = parseGcpLink({
+    project: "my-project",
+    region: "us-central1",
+    exposure: "internet",
+    minInstances: 0,
+    maxInstances: 4,
+    concurrency: 4,
+    cpu: "1",
+    memory: "1Gi",
+    timeout: 300,
+    env: [{ name: "BIGAGENT_ADMIT_LOCAL", value: "1" }],
+  });
+  assert.equal("error" in admit, true);
+
+  const cold = cloudRunPlan({
+    agentName: project.name,
+    project: "my-project",
+    region: "us-central1",
+    imageId: id,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: [],
+    minInstances: 0,
+    maxInstances: 4,
+    concurrency: 4,
+    cpu: "1",
+    memory: "1Gi",
+    timeout: 300,
+    env: [],
+  });
+  if ("error" in cold) throw new Error(cold.error);
+  assert.match(cold.plan.warning, /min instances to 1/);
+});
+
+test("the editor assistant gets the canvas and the platform rules, not a secret value", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  const project = initWorkspace(root, "Desk");
+  setSecret(root, "CURSOR_API_KEY", "not-a-real-key");
+  const prompt = assistantContext(loadProject(root), "What is missing?");
+  assert.equal(prompt.includes("not-a-real-key"), false);
+  assert.match(prompt, /Do not invent a secret value/);
+  assert.match(prompt, /Do not write files/);
+  assert.match(prompt, /agent:Desk/);
+  assert.match(prompt, /AGENT_SDK_BEARER_TOKEN/);
+  assert.match(prompt, /What is missing\?/);
+});
+
+test("a ship update paints the same face the page shows and keeps the log filters", () => {
+  const logs = "2026-11-07T20:00:00.000Z info ready\n2026-11-07T20:00:05.000Z error tool lookup failed\n";
+  const signals = runSignals(logs);
+  assert.equal(signals.errors, 1);
+  assert.match(signals.lastError, /tool lookup failed/);
+  assert.equal(signals.spanMs, 5000);
+  assert.equal(runSignals("2026-11-07T20:00:00.000Z info ready").spanMs, null);
+  assert.equal(runSignals("").errors, 0);
+  assert.equal(runSignals("info not-a-real-key").lastError, "");
+
+  const status = { docker: "ready" as const, running: true, phase: "idle" as const, summary: "Listening on http://127.0.0.1:3000.", logs, publicUrl: "", stats: { cpu: "1.2%", memory: "40MiB / 1GiB", healthMs: 12 } };
+  const face = shipFace(status, "en", false);
+  assert.equal(face.state, "running");
+  assert.equal(face.label, "Running");
+  assert.equal(face.summaryKind, "plain");
+  assert.equal(face.cpu, "1.2%");
+  assert.equal(face.health, "12 ms");
+  assert.equal(face.errors, "1");
+  assert.equal(face.window, "5 s");
+  assert.match(face.lastError, /tool lookup failed/);
+  assert.equal(face.startDisabled, true);
+  assert.equal(face.startText, "Running");
+  assert.equal(face.playgroundDisabled, false);
+  assert.equal(face.refreshDisabled, false);
+
+  const checking = shipFace({ docker: "unknown", running: false, phase: "checking", summary: "Checking Docker on this machine.", logs: "", publicUrl: "" }, "en", false);
+  assert.equal(checking.summaryKind, "working");
+  assert.equal(checking.startDisabled, false);
+  assert.equal(checking.refreshDisabled, false);
+  const building = shipFace({ docker: "ready", running: false, phase: "building", summary: "Building the local image. The log shows each step.", logs: "", publicUrl: "" }, "en", false);
+  assert.equal(building.startDisabled, true);
+  assert.equal(building.startText, "Building");
+  assert.equal(building.refreshDisabled, true);
+  const down = shipFace({ docker: "down", running: false, phase: "idle", dockerWhy: "missing", summary: "Docker is not installed, or this machine cannot run it. Install Docker, leave it running, then come back to Ship.", logs: "", publicUrl: "" }, "en", false);
+  assert.equal(down.state, "down");
+  assert.equal(down.summaryKind, "error");
+  const failed = shipFace({ docker: "ready", running: false, failed: true, phase: "idle", summary: "The build stopped. Read the log.", logs: "", publicUrl: "" }, "es", false);
+  assert.equal(failed.label, "Falló");
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  initWorkspace(root, "Desk");
+  const page = { mode: "deploy" as const, selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 };
+  const layout = readLayout(root);
+  const html = designerHtml(loadProject(root), page, true, undefined, "", layout, layout, false, undefined, status);
+  assert.match(html, /id="ship-live"/);
+  assert.match(html, /id="meter-cpu">1\.2%/);
+  assert.match(html, /id="meter-errors">1/);
+  assert.match(html, /id="meter-window">5 s/);
+  assert.match(html, /id="ship-last-error"/);
+  assert.match(html, /tool lookup failed/);
+  assert.match(html, /data-state="running"/);
+  assert.match(html, /id="ship-start"[^>]*disabled[^>]*>Running</);
+  assert.match(html, /id="log-search"/);
+  assert.match(html, /function applyFace/);
+  assert.match(html, /data\.type === "ship-face"/);
+  assert.equal(html.includes('document.getElementById("log-search").value ='), false);
+  assert.equal(html.includes("webview.html"), false);
+  const flow = designerHtml(loadProject(root), { ...page, mode: "flow" }, true, undefined, "", layout, layout, false, undefined, status);
+  assert.match(flow, /id="surface"/);
+  assert.equal(flow.includes('id="ship-live"'), false);
+});
+
+test("a built image is pinned and the next start does not rebuild it", () => {
+  assert.equal(imageName("Telegram desk"), "bigagent-telegram-desk");
+  const id = `sha256:${"ab".repeat(32)}`;
+  assert.equal(parseImageId(`image ${id}`), id);
+  assert.equal(parseImageId("not-a-real-token"), null);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
+  initWorkspace(root, "Telegram desk");
+  const first = fs.readFileSync(path.join(root, "compose.yaml"), "utf8");
+  assert.match(first, /build: \./);
+  assert.match(first, /image: bigagent-telegram-desk\n/);
+  assert.equal(shipArgs("start", false, false).includes("--build"), true);
+  writeImagePin(root, id);
+  writeDocker(root, true);
+  const pinned = fs.readFileSync(path.join(root, "compose.yaml"), "utf8");
+  assert.match(pinned, new RegExp(`image: bigagent-telegram-desk@${id}`));
+  assert.equal(pinned.includes("build: ."), false);
+  assert.equal(readImagePin(root), id);
+  assert.equal(fs.readFileSync(path.join(root, ".bigagent", "image.json"), "utf8").includes("not-a-real-token"), false);
+  assert.equal(shipArgs("start", true, false).includes("--build"), false);
+  assert.equal(shipArgs("rebuild", true, false).includes("--build"), true);
+  assert.throws(() => writeImagePin(root, "sha256:short"), /sha256/);
+  const layout = readLayout(root);
+  const html = designerHtml(loadProject(root), { mode: "deploy", selected: "", notice: "", libraryOpen: false, inspectorOpen: false, libraryWidth: 240, inspectorWidth: 280 }, true, undefined, "", layout, layout, false, undefined, {
+    docker: "ready", running: true, phase: "idle", summary: "Listening on http://127.0.0.1:3000.", logs: "", publicUrl: "", image: id,
+  });
+  assert.match(html, /id="ship-image"/);
+  assert.match(html, /sha256:abababababab/);
+  assert.equal(html.includes(id), false);
+  const clash = "Bind for 127.0.0.1:3000 failed: port is already allocated";
+  assert.equal(portHolder(clash, "workspace-agent-1 127.0.0.1:3000->3000/tcp"), "Port 3000 is already used by workspace-agent-1. Stop that container, then Start again.");
+  assert.equal(portHolder(clash, ""), "Port 3000 is already used on this machine. Stop the other agent, then Start again.");
+  assert.equal(portHolder("The build stopped.", "workspace-agent-1 127.0.0.1:3000->3000/tcp"), "");
+  assert.equal(mergeLogs("build step\n", ""), "build step\n");
+  assert.equal(mergeLogs("build step\n", "agent-1  | Telegram desk listening\n"), "agent-1  | Telegram desk listening\n");
+  assert.match(phrase("es", portHolder(clash, "workspace-agent-1 127.0.0.1:3000->3000/tcp")), /workspace-agent-1/);
 });
 
 test("local ship reads running, failed, and log lines", () => {

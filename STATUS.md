@@ -4,13 +4,13 @@ Retomar por aquí. Lo que ya está en la carpeta se construyó sin HU ni spec. E
 
 ## Siguiente
 
-Que Preguntar pueda cambiar el lienzo. Hoy solo contesta, y solo después de que el modelo del editor responda la prueba. Está en [HU-001 escribir](docs/05-backlog/03-usar/E-001-empezar/F-005-escribir/HU-001-escribir.md).
+La extensión publicada en este árbol es la **0.2.76**. Cloud Run de `bigagent-telegram-desk` está en servicio, con el mínimo y el máximo del servicio en 1. El monitor lee solicitudes, errores y latencia de cualquier canal. Lo que ya quedó y por qué está en [docs/mejoras.md](docs/mejoras.md). La decisión de no reescribir el panel está en [docs/arquitectura.md](docs/arquitectura.md).
 
 Probar Slack, GitHub, GitLab y Bitbucket contra sus servicios. WhatsApp sigue `ai-tested` hasta que se use contra Meta. Ship local sigue `ai-tested` en [002-ship-local](docs/07-runbooks/002-ship-local/runbook.md). Empezar, Docker, el faltante del lienzo y el chat de solo lectura están `ai-tested` en [003-usar](docs/07-runbooks/003-usar/runbook.md).
 
 ## Dónde está
 
-`ecosystem/big-agent-creator/`. No entra al git del molde. Su git es `https://github.com/salim-castellanos/big-agent-creator`. `origin/main` es el corte publicado. El trabajo posterior está en el árbol y no en ese commit. Qué hace la carpeta hoy: `docs/linea-base.md`. El método está en `../../docs/`.
+`ecosystem/big-agent-creator/`. No entra al git del molde. Su git es `https://github.com/salim-castellanos/big-agent-creator`. `origin/main` es el corte publicado. El trabajo posterior está en el árbol y no en ese commit. Qué hace la carpeta hoy: `docs/linea-base.md`. Mejoras hechas, por tipo y porqué: `docs/mejoras.md`. El método está en `../../docs/`.
 
 ## Tienda
 
@@ -49,4 +49,4 @@ En `ecosystem/big-agent-creator/apps/extension`: `npm install`, `npm test`, `npm
 
 ## Fuera de este corte
 
-Chat que edita la carpeta, AWS, GCP, Azure, Kubernetes, y un ejecutor de modelo distinto al API de Cursor.
+AWS y Azure siguen sin comandos. Kubernetes. Un ejecutor de modelo distinto al API de Cursor. Reescribir el panel a otro framework. CPU, memoria y número de instancias no están en el log de Cloud Run.
