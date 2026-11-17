@@ -1,0 +1,22 @@
+{
+  "positions": {
+    "channel:telegram": { "x": 36, "y": 80 },
+    "scope": { "x": 320, "y": 70 },
+    "agent": { "x": 600, "y": 70 },
+    "skill:ask-the-clock": { "x": 900, "y": 24 },
+    "skill:hand-off": { "x": 900, "y": 220 },
+    "tool:current-time": { "x": 1180, "y": 24 },
+    "mcp:clock": { "x": 1460, "y": 24 }
+  },
+  "zoom": 0.72,
+  "pan": { "x": 8, "y": 80 },
+  "look": "clear",
+  "links": [
+    { "from": "channel:telegram", "to": "scope" },
+    { "from": "scope", "to": "agent" },
+    { "from": "agent", "to": "skill:ask-the-clock" },
+    { "from": "agent", "to": "skill:hand-off" },
+    { "from": "skill:ask-the-clock", "to": "tool:current-time" },
+    { "from": "tool:current-time", "to": "mcp:clock" }
+  ]
+}

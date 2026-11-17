@@ -11,7 +11,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { designerHtml, shipFace, type Ui } from "./designer";
 import { copy, phrase } from "./copy";
-import { applyProposal, arrange, assistantContext, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, composePortClosed, DOCKER_MISSING, dockerProblem, flowReport, lmGate, readProposal, replyWithoutProposal, chatHandoff, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, webhookNeedsLocal, readLayout, readStudio, restoreFolder, restoreWorkspace, review, runSignals, redactValues, envState, imageName, languageChoice, cloudRunArgs, cloudRunPlan, cloudRunRuntimeAccount, secretAccessorArgs, agentSignal, parseLogEntries, channelBars, monitorFacts, monitorFilter, consoleAppend, pushProgress, windowsShell, pickGcloud, commandFailure, consoleCommand, formatCommand, gcpPreview, gcpChecks, cloudRunImageMatch, parseTrafficRevision, parseServiceRelease, releasedImage, serviceMissing, shortImage, composeImageId, secretSyncPlan, parseGcpLink, readGcpLink, writeGcpLink, parseEnv, parseImageId, readImagePin, safeRelative, saveAgentSettings, shipArgs, portHolder, mergeLogs, writeDocker, writeImagePin, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
+import { applyProposal, arrange, assistantContext, captureFolder, cardNeeds, CHANNEL_NEEDS, composeIsRunning, composePortClosed, DOCKER_MISSING, dockerProblem, flowReport, lmGate, readProposal, replyWithoutProposal, chatHandoff, simulateFlow, createProject, deleteItem, deliveryCheck, emitSdk, ensureStudioFile, EXAMPLES, executionSteps, flowGaps, flowLinks, initWorkspace, keepWorkspace, LIBRARY_KINDS, linksExcept, loadExample, loadProject, logLevel, logStamp, nextCopyName, publicChannelUrl, webhookNeedsLocal, readLayout, readStudio, restoreFolder, restoreWorkspace, review, runSignals, redactValues, envState, imageName, languageChoice, cloudRunArgs, cloudRunPlan, cloudRunRuntimeAccount, secretAccessorArgs, agentSignal, parseLogEntries, channelBars, monitorFacts, monitorFilter, interactionStages, monitorFreshness, consoleAppend, pushProgress, windowsShell, pickGcloud, commandFailure, consoleCommand, formatCommand, gcpPreview, gcpChecks, cloudRunImageMatch, parseTrafficRevision, parseServiceRelease, releasedImage, serviceMissing, cloudRunDescribeFailure, shortImage, composeImageId, secretSyncPlan, parseGcpLink, readGcpLink, writeGcpLink, parseEnv, parseImageId, readImagePin, safeRelative, saveAgentSettings, shipArgs, portHolder, mergeLogs, writeDocker, writeImagePin, saveItem, saveModel, saveScope, scanWorkspace, scrubLogs, setCanvasNode, setSecret, slackCheckTarget, slackReach, slug, telegramReach, telegramSetWebhookTarget, TRIGGER_TYPES, toggleLink, whatsappCheckTarget, whatsappReach, whatsappSendTarget, writeEvalCase, writeLayout } from "./project";
 
 test("an agent folder keeps secrets out of the image", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
@@ -255,7 +255,8 @@ test("a telegram chat verifies the secret and answers in the same conversation",
   assert.match(channel, /replyTelegram/);
   assert.match(channel, /replied in/);
   const agent = fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8");
-  assert.match(agent, /cwd: "\/srv\/agent\/bot"/);
+  assert.match(agent, /workspaceDir: "\/srv\/agent\/bot"/);
+  assert.equal(/local:\s*\{\s*cwd:/.test(agent), false);
   assert.equal(/sandbox:\s*true/.test(agent), false);
   assert.match(fs.readFileSync(path.join(root, ".cursorignore"), "utf8"), /node_modules/);
   assert.match(reply, /sendMessage/);
@@ -273,7 +274,28 @@ test("a folder the SDK would refuse is named before Docker starts", () => {
   createProject(root, "Desk");
   assert.deepEqual(deliveryCheck(root), []);
   const image = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+  assert.match(image, /node:22\.23\.5-slim/);
   assert.match(image, /--allow-anonymous/);
+  assert.equal(image.includes("npm install -g"), false);
+  assert.match(image, /node_modules\/\.bin\/agent-sdk/);
+  assert.match(image, /git init --quiet \/srv\/agent\/bot/);
+  assert.match(image, /setpriv --reuid=node/);
+  assert.match(image, /HOME=\/home\/node/);
+  assert.match(image, /chown -R node:node \/var\/lib\/agent-sdk/);
+  assert.equal(image.includes("USER node"), false);
+  fs.writeFileSync(path.join(root, "Dockerfile"), "FROM node:22.13-slim\nCMD [\"agent-sdk\", \"serve\", \"--dir\", \"/srv/agent\"]\n", "utf8");
+  emitSdk(root);
+  assert.match(fs.readFileSync(path.join(root, "Dockerfile"), "utf8"), /git init --quiet \/srv\/agent\/bot/);
+  const dockerPath = path.join(root, "Dockerfile");
+  const past = new Date("2020-01-01T00:00:00Z");
+  fs.utimesSync(dockerPath, past, past);
+  emitSdk(root);
+  assert.equal(fs.statSync(dockerPath).mtimeMs, past.getTime());
+  const custom = "FROM scratch\nCMD [\"echo\", \"hi\"]\n";
+  fs.writeFileSync(path.join(root, "Dockerfile"), custom, "utf8");
+  emitSdk(root);
+  assert.equal(fs.readFileSync(path.join(root, "Dockerfile"), "utf8"), custom);
+  assert.match(fs.readFileSync(path.join(root, ".dockerignore"), "utf8"), /\nout\n/);
   assert.equal(image.includes("AGENT_SDK_BEARER_TOKEN="), false);
 
   const pkgPath = path.join(root, "package.json");
@@ -290,6 +312,7 @@ test("a folder the SDK would refuse is named before Docker starts", () => {
   assert.ok(ids.includes("zod-dep"));
   assert.ok(ids.includes("docker-install"));
   assert.ok(ids.includes("docker-mode"));
+  assert.ok(ids.includes("docker-git"));
   assert.ok(ids.includes("zod:bot/tools/broken.ts"));
   assert.match(deliveryCheck(root).map((finding) => finding.message).join("\n"), /require\(\) ES Module in a cycle/);
 
@@ -306,7 +329,7 @@ test("a folder the SDK would refuse is named before Docker starts", () => {
 
 test("the shipped examples still satisfy the serve contract", () => {
   const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../examples");
-  for (const id of ["hello", "telegram-desk", "support-desk", "change-gate"]) {
+  for (const id of ["hello", "telegram-desk", "clock-desk", "support-desk", "change-gate"]) {
     const example = path.join(examples, id);
     assert.equal(fs.existsSync(path.join(example, "bot", "agent.ts")), true, id);
     assert.deepEqual(deliveryCheck(example), [], id);
@@ -820,6 +843,177 @@ test("a folder with every component is one the Agent SDK can typecheck", () => {
   assert.equal(ran.status, 0, `${ran.stdout}\n${ran.stderr}`);
 });
 
+test("three canvas agents keep their settings and are ready to deploy", () => {
+  const typecheck = (root: string) => {
+    const extensionModules = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../node_modules");
+    fs.symlinkSync(extensionModules, path.join(root, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    fs.writeFileSync(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "bundler", strict: true, noEmit: true, skipLibCheck: true, types: ["node"] },
+        include: ["bot/**/*.ts"],
+      }),
+      "utf8",
+    );
+    const tsc = path.join(extensionModules, "typescript", "bin", "tsc");
+    const ran = spawnSync(process.execPath, [tsc, "--noEmit", "--pretty", "false"], { cwd: root, encoding: "utf8" });
+    assert.equal(ran.status, 0, `${ran.stdout}\n${ran.stderr}`);
+  };
+  const finish = (root: string) => {
+    for (const name of flowReport(loadProject(root)).secrets) setSecret(root, name, "set");
+    const done = simulateFlow(loadProject(root));
+    assert.equal(done.ready, true, done.lines.join(" | "));
+    assert.deepEqual(deliveryCheck(root), []);
+  };
+
+  const clock = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-sim-clock-"));
+  createProject(clock, "Clock desk");
+  saveScope(clock, "Hours are weekdays 9 to 18. Time answers come from the clock tool. Refuse payments.");
+  saveAgentSettings(clock, { model: "composer-2.5", effort: "low", fast: true, sandbox: false, reminders: false, harness: [], maxRunningTurns: 2, egress: ["api.telegram.org"] });
+  saveItem(clock, { kind: "channel", name: "telegram", description: "telegram", body: "A person writes.", verify: true, route: "/", secret: "TELEGRAM_WEBHOOK_SECRET" });
+  saveItem(clock, { kind: "skill", name: "ask-the-clock", description: "the person asks the time", body: "Call current-time.\n" });
+  saveItem(clock, { kind: "tool", name: "current-time", description: "Read the current time.", body: "", calls: "mcp:clock:get_current_time", effect: "read", parameters: [{ name: "timezone", type: "string", required: true, description: "IANA timezone." }] });
+  saveItem(clock, { kind: "mcp", name: "clock", description: "Public clock", body: "", transport: "http", url: "https://time.now/mcp" });
+  saveItem(clock, { kind: "schedule", name: "monday", description: "Open the desk.", body: "", route: "0 9 * * 1" });
+  saveItem(clock, { kind: "hook", name: "audit", description: "turn.completed", body: "return;" });
+  const clockProject = loadProject(clock);
+  const clockLinks = [
+    { from: "channel:telegram", to: "scope" },
+    { from: "schedule:monday", to: "scope" },
+    { from: "scope", to: "agent" },
+    { from: "agent", to: "skill:ask-the-clock" },
+    { from: "skill:ask-the-clock", to: "tool:current-time" },
+    { from: "tool:current-time", to: "mcp:clock" },
+  ];
+  writeLayout(clock, { ...readLayout(clock), links: clockLinks });
+  const steps = executionSteps(["channel:telegram", "schedule:monday", "scope", "agent", "skill:ask-the-clock", "tool:current-time", "mcp:clock"], flowLinks(clockProject, readLayout(clock)));
+  assert.ok(steps["channel:telegram"] < steps.scope);
+  assert.ok(steps.scope < steps.agent);
+  assert.ok(steps.agent < steps["tool:current-time"]);
+  assert.ok(steps["tool:current-time"] < steps["mcp:clock"]);
+  const clockAgent = fs.readFileSync(path.join(clock, "bot", "agent.ts"), "utf8");
+  assert.match(clockAgent, /id: "composer-2.5"/);
+  assert.match(clockAgent, /value: "low"/);
+  assert.match(clockAgent, /value: "true"/);
+  assert.match(clockAgent, /maxRunningTurns: 2/);
+  assert.match(clockAgent, /api\.telegram\.org/);
+  assert.match(clockAgent, /time\.now/);
+  assert.equal(clockAgent.includes("sandbox: true"), false);
+  assert.match(fs.readFileSync(path.join(clock, "bot", "tools", "current-time.ts"), "utf8"), /callTool\("clock", "get_current_time", input\)/);
+  assert.match(fs.readFileSync(path.join(clock, "bot", "tools", "current-time.ts"), "utf8"), /typeof part.text === "string"/);
+  assert.match(fs.readFileSync(path.join(clock, "bot", "channels", "telegram.ts"), "utf8"), /waitUntil\(send/);
+  finish(clock);
+  const clockPlan = cloudRunPlan({
+    agentName: "Clock desk",
+    project: "mistratos",
+    region: "us-central1",
+    imageId: `sha256:${"ab".repeat(32)}`,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: loadProject(clock).secrets.filter((row) => row.configured).map((row) => row.name),
+    minInstances: 1,
+    maxInstances: 1,
+    concurrency: 10,
+    cpu: "1",
+    memory: "1Gi",
+    cpuAlways: true,
+    timeout: 300,
+  });
+  if ("error" in clockPlan) throw new Error(clockPlan.error);
+  const clockArgs = cloudRunArgs(clockPlan.plan).join(" ");
+  assert.match(clockArgs, / --cpu 1 /);
+  assert.match(clockArgs, / --memory 1Gi /);
+  assert.match(clockArgs, / --no-cpu-throttling/);
+  assert.match(clockArgs, / --min-instances 1/);
+  assert.match(clockArgs, /TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest/);
+  assert.equal(clockArgs.includes("=set"), false);
+  typecheck(clock);
+
+  const ops = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-sim-ops-"));
+  createProject(ops, "Ops desk");
+  saveScope(ops, "Open a case only after lookup. Refuse payments.");
+  saveAgentSettings(ops, { model: "grok-4.5", effort: "high", fast: false, maxRunningTurns: 4, egress: ["example.com"] });
+  saveItem(ops, { kind: "channel", name: "inbox", description: "webhook", body: "A customer message", verify: true, route: "/hooks/inbox", secret: "WEBHOOK_SECRET" });
+  saveItem(ops, { kind: "schedule", name: "morning", description: "Review the queue.", body: "", route: "0 9 * * 1" });
+  saveItem(ops, { kind: "mcp", name: "cases", description: "Case store", body: "", transport: "http", url: "https://cases.example.com/mcp", secret: "CASES_TOKEN" });
+  saveItem(ops, { kind: "tool", name: "open-case", description: "Open a case.", body: "", calls: "mcp:cases:open_case", effect: "write", parameters: [{ name: "question", type: "string", required: true, description: "The unanswered question." }] });
+  saveItem(ops, { kind: "host", name: "pager", description: "Hidden pager", body: "", transport: "http", url: "https://pager.example.com/mcp", secret: "PAGER_TOKEN" });
+  saveItem(ops, { kind: "tool", name: "page", description: "Page the on-call person.", body: "", calls: "mcp:pager:send", effect: "irreversible", parameters: [{ name: "reason", type: "string", required: true, description: "Why a person is needed." }] });
+  saveItem(ops, { kind: "subagent", name: "reviewer", description: "a case needs a second pass", body: "Look again.\n" });
+  saveItem(ops, { kind: "hook", name: "audit", description: "turn.completed", body: "return;" });
+  const opsAgent = fs.readFileSync(path.join(ops, "bot", "agent.ts"), "utf8");
+  assert.match(opsAgent, /id: "grok-4.5"/);
+  assert.match(opsAgent, /value: "high"/);
+  assert.match(opsAgent, /value: "false"/);
+  assert.match(opsAgent, /cases\.example\.com/);
+  assert.match(opsAgent, /pager\.example\.com/);
+  assert.match(fs.readFileSync(path.join(ops, "bot", "tools", "open-case.ts"), "utf8"), /callTool\("cases", "open_case", input\)/);
+  assert.match(fs.readFileSync(path.join(ops, "bot", "tools", "page.ts"), "utf8"), /needsApproval: true/);
+  assert.match(fs.readFileSync(path.join(ops, "bot", "tools", "page.ts"), "utf8"), /callTool\("pager", "send", input\)/);
+  assert.match(fs.readFileSync(path.join(ops, "bot", "host-connections", "pager.ts"), "utf8"), /https:\/\/pager\.example\.com\/mcp/);
+  assert.match(fs.readFileSync(path.join(ops, "bot", "subagents", "reviewer", "agent.ts"), "utf8"), /a case needs a second pass/);
+  assert.match(fs.readFileSync(path.join(ops, "bot", "schedules", "morning.md"), "utf8"), /0 9 \* \* 1/);
+  finish(ops);
+  const opsPlan = cloudRunPlan({
+    agentName: "Ops desk",
+    project: "mistratos",
+    region: "us-central1",
+    imageId: `sha256:${"cd".repeat(32)}`,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: loadProject(ops).secrets.filter((row) => row.configured).map((row) => row.name),
+    minInstances: 1,
+    maxInstances: 2,
+    concurrency: 4,
+    cpu: "2",
+    memory: "2Gi",
+    cpuAlways: false,
+    timeout: 120,
+  });
+  if ("error" in opsPlan) throw new Error(opsPlan.error);
+  const opsArgs = cloudRunArgs(opsPlan.plan).join(" ");
+  assert.match(opsArgs, / --cpu-throttling/);
+  assert.equal(opsArgs.includes("--no-cpu-throttling"), false);
+  assert.match(opsArgs, / --cpu 2 /);
+  assert.match(opsArgs, / --memory 2Gi /);
+  assert.match(opsArgs, /CASES_TOKEN=CASES_TOKEN:latest/);
+  typecheck(ops);
+
+  const gate = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-sim-gate-"));
+  createProject(gate, "Change gate");
+  saveScope(gate, "Comment on the pull request. Do not merge.");
+  saveAgentSettings(gate, { model: "auto", effort: "medium", fast: true, maxRunningTurns: 1 });
+  saveItem(gate, { kind: "channel", name: "github", description: "github", body: "A pull request", verify: true, route: "pull_request", repo: "acme/app", secret: "GITHUB_WEBHOOK_SECRET" });
+  saveItem(gate, { kind: "channel", name: "telegram", description: "telegram", body: "A person writes.", verify: true, route: "/", secret: "TELEGRAM_WEBHOOK_SECRET" });
+  saveItem(gate, { kind: "mcp", name: "repo", description: "Repository", body: "", transport: "stdio", command: "node" });
+  saveItem(gate, { kind: "subagent", name: "security-pass", description: "a diff needs a security pass", body: "Name the risk.\n" });
+  const gateAgent = fs.readFileSync(path.join(gate, "bot", "agent.ts"), "utf8");
+  assert.equal(/model:\s*\{/.test(gateAgent), false);
+  assert.match(fs.readFileSync(path.join(gate, "bot", "channels", "github.ts"), "utf8"), /onPullRequest/);
+  assert.match(fs.readFileSync(path.join(gate, "bot", "channels", "github.ts"), "utf8"), /acme\/app/);
+  assert.match(fs.readFileSync(path.join(gate, "bot", "mcp-connections", "repo.ts"), "utf8"), /command: "node"/);
+  finish(gate);
+  const gatePlan = cloudRunPlan({
+    agentName: "Change gate",
+    project: "mistratos",
+    region: "us-central1",
+    imageId: `sha256:${"ef".repeat(32)}`,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: loadProject(gate).secrets.filter((row) => row.configured).map((row) => row.name),
+    minInstances: 0,
+    maxInstances: 4,
+    cpu: "1",
+    memory: "1Gi",
+    cpuAlways: true,
+    timeout: 300,
+  });
+  if ("error" in gatePlan) throw new Error(gatePlan.error);
+  assert.match(gatePlan.plan.warning, /min instances/);
+  assert.match(cloudRunArgs(gatePlan.plan).join(" "), / --no-cpu-throttling/);
+  typecheck(gate);
+});
+
 test("a person can go from an empty folder through the canvas to ship", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-"));
   assert.equal(scanWorkspace(root).missing.some((piece) => piece.id === "marker"), true);
@@ -834,6 +1028,10 @@ test("a person can go from an empty folder through the canvas to ship", () => {
   assert.match(fs.readFileSync(path.join(root, "compose.yaml"), "utf8"), /BIGAGENT_ADMIT_LOCAL/);
   assert.equal(fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8").includes("sandbox: true"), false);
 
+  saveAgentSettings(root, { model: "grok-4.7", effort: "low", fast: true });
+  assert.equal(loadProject(root).model, "grok-4.7");
+  assert.match(fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8"), /id: "grok-4.7"/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8"), /value: "low"/);
   saveAgentSettings(root, { model: "composer-2.5", effort: "low", fast: false, sandbox: true, reminders: true, harness: ["read", "shell"], maxRunningTurns: 2, egress: ["example.com"] });
   const tuned = loadProject(root);
   assert.equal(tuned.model, "composer-2.5");
@@ -878,6 +1076,8 @@ test("a person can go from an empty folder through the canvas to ship", () => {
   assert.match(stopped, /id="fold-log"/);
   assert.match(stopped, /id="fold-gcp-top"/);
   assert.match(stopped, /id="fold-gcp-bottom"/);
+  assert.match(stopped, /gcpPane/);
+  assert.match(stopped, /followGcpLog/);
   assert.match(stopped, /\.ship-stack\.fold-top \.cloud-bottom \{ flex: 1; height: auto; min-height: 0; \}/);
   assert.match(stopped, /Uploading…/);
   assert.match(stopped, /id="gcp-deploy-pane"/);
@@ -888,6 +1088,7 @@ test("a person can go from an empty folder through the canvas to ship", () => {
   assert.match(stopped, /Uses the local value/);
   assert.equal(stopped.includes("not-in-the-image"), false);
   assert.match(stopped, /id="gcp-refresh"/);
+  assert.match(stopped, /id="gcp-stop"/);
   assert.match(stopped, /id="gcp-verdict"/);
   assert.match(stopped, /id="gcp-trail"/);
   assert.match(stopped, /\.verdict\.current \{ color: #052e16; background: #22C55E; \}/);
@@ -1027,11 +1228,43 @@ test("a blank folder offers each example, and the canvas names what a flow still
   assert.match(ask, /id="ask-open"/);
 });
 
+test("a canvas clock calls the public MCP named on the tool", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-clock-"));
+  createProject(root, "Clock desk");
+  saveItem(root, { kind: "mcp", name: "clock", description: "Public clock", body: "", url: "https://time.now/mcp", transport: "http" });
+  saveItem(root, {
+    kind: "tool",
+    name: "current-time",
+    description: "Read the current time in one IANA timezone from the public clock.",
+    body: "",
+    calls: "mcp:clock:get_current_time",
+    effect: "read",
+    parameters: [{ name: "timezone", type: "string", required: true, description: "IANA timezone, for example America/Bogota." }],
+  });
+  assert.match(fs.readFileSync(path.join(root, "bot", "tools", "current-time.ts"), "utf8"), /callTool\("clock", "get_current_time", input\)/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "mcp-connections", "clock.ts"), "utf8"), /https:\/\/time\.now\/mcp/);
+  assert.match(fs.readFileSync(path.join(root, "bot", "agent.ts"), "utf8"), /time\.now/);
+  assert.equal(review(loadProject(root)).some((row) => row.message.includes("No MCP named")), false);
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), "bigagent-clock-ex-"));
+  loadExample(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../examples/clock-desk"), dest);
+  const project = loadProject(dest);
+  assert.equal(project.items.some((item) => item.kind === "mcp" && item.name === "clock" && item.url === "https://time.now/mcp"), true);
+  assert.equal(project.items.some((item) => item.kind === "tool" && item.calls === "mcp:clock:get_current_time"), true);
+  assert.equal(project.items.some((item) => item.kind === "skill" && item.name === "ask-the-clock"), true);
+  const links = readLayout(dest).links.map((link) => `${link.from}>${link.to}`);
+  assert.equal(links.includes("skill:ask-the-clock>tool:current-time"), true);
+  assert.equal(links.includes("tool:current-time>mcp:clock"), true);
+  emitSdk(dest);
+  assert.match(fs.readFileSync(path.join(dest, "bot", "tools", "current-time.ts"), "utf8"), /callTool\("clock", "get_current_time", input\)/);
+  assert.match(fs.readFileSync(path.join(dest, "bot", "agent.ts"), "utf8"), /time\.now/);
+});
+
 test("each example is servable and only owes secrets the person must set", () => {
   const examplesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "examples");
   const expected: Record<string, string[]> = {
     hello: ["CURSOR_API_KEY"],
     "telegram-desk": ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"],
+    "clock-desk": ["CURSOR_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"],
     "support-desk": ["CASES_TOKEN", "CURSOR_API_KEY", "WEBHOOK_SECRET"],
     "change-gate": ["CURSOR_API_KEY", "GITHUB_TOKEN", "GITHUB_WEBHOOK_SECRET", "PAGER_TOKEN", "REVIEW_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WEBHOOK_SECRET"],
   };
@@ -1203,13 +1436,58 @@ test("a person configures Cloud Run on the GCP tab and the result stays there", 
   assert.match(monitorFilter("bigagent-telegram-desk", "us-central1"), /replied in/);
   assert.match(monitorFilter("bigagent-telegram-desk", "us-central1"), /durationMs/);
   assert.equal(monitorFilter("bigagent-telegram-desk", "us-central1").includes("not-a-real-key"), false);
-  assert.match(agentSignal([{ timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.015s" } }]).headline, /agent is answering/);
+  const open = agentSignal([{ timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.008s" } }], Date.parse("2026-11-15T03:14:11.230Z"));
+  assert.match(open.headline, /waiting 45s/);
+  assert.match(open.headline, /8ms/);
+  assert.match(phrase("es", open.headline), /lleva 45 s esperando/);
+  assert.equal(monitorFacts([{ timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.008s" } }], Date.parse("2026-11-15T03:14:11.230Z")).waitingMs, 45000);
+  const stacked = interactionStages([
+    { timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.008s" } },
+    { timestamp: "2026-11-15T03:13:27.000Z", textPayload: "LocalCursorRulesService load completed meta={durationMs: 18000, ruleCount: 0}" },
+  ], Date.parse("2026-11-15T03:14:11.230Z"));
+  assert.equal(stacked[0].acceptMs, 8);
+  assert.equal(stacked[0].prepMs, 18000);
+  assert.equal(stacked[0].modelMs, 0);
+  assert.equal(stacked[0].openMs, 45000 - 8 - 18000);
+  const closed = interactionStages([
+    { timestamp: "2026-11-15T03:13:26.230Z", httpRequest: { status: 200, requestUrl: "https://example.run.app/v1/channels/telegram/", latency: "0.008s" } },
+    { timestamp: "2026-11-15T03:13:27.000Z", textPayload: "LocalCursorRulesService load completed meta={durationMs: 18000, ruleCount: 0}" },
+    { timestamp: "2026-11-15T03:13:46.000Z", textPayload: "[telegram] replied in 20000ms" },
+  ], Date.parse("2026-11-15T03:14:11.230Z"));
+  assert.equal(closed[0].modelMs, 20000 - 8 - 18000);
+  assert.equal(closed[0].openMs, 0);
+  const lied = interactionStages([
+    { timestamp: "2026-11-15T03:13:26.000Z", textPayload: "[telegram] turn started" },
+    { timestamp: "2026-11-15T03:13:27.000Z", textPayload: "LocalCursorRulesService load completed meta={durationMs: 4000, ruleCount: 1}" },
+    { timestamp: "2026-11-15T03:13:46.000Z", textPayload: "[telegram] replied in 999999ms" },
+    { timestamp: "2026-11-15T03:14:00.000Z", textPayload: "[whatsapp] turn started" },
+  ], Date.parse("2026-11-15T03:14:10.000Z"));
+  assert.equal(lied[0].channel, "telegram");
+  assert.equal(lied[0].prepMs, 4000);
+  assert.equal(lied[0].modelMs, 16000);
+  assert.equal(lied[0].openMs, 0);
+  assert.equal(lied[1].channel, "whatsapp");
+  assert.equal(lied[1].openMs, 10000);
+  const many = interactionStages(Array.from({ length: 9 }, (_, index) => ({
+    timestamp: new Date(Date.parse("2026-11-15T03:00:00.000Z") + index * 60000).toISOString(),
+    textPayload: "[telegram] turn started",
+  })), Date.parse("2026-11-15T03:20:00.000Z"));
+  assert.equal(many.length, 9);
+  assert.equal(monitorFreshness("24h"), "1d");
+  assert.equal(monitorFreshness("custom", Date.parse("2026-11-15T01:30:00.000Z"), Date.parse("2026-11-15T03:00:00.000Z")), "2h");
+  assert.equal(monitorFreshness("nope"), "6h");
+  assert.equal(bars[0].at, Date.parse("2026-11-15T02:28:34.176510Z"));
   assert.ok(bars[0].ms > 10 && bars[0].ms < 20);
   assert.equal(parseLogEntries("noise [{\"timestamp\":\"2026-11-15T02:00:00Z\",\"textPayload\":\"[telegram] turn failed: turn interrupted\"}] tail").length, 1);
   assert.match(opened, /data-gcp-pane="status"/);
   assert.equal(/data-gcp-pane="status" hidden/.test(opened), false);
   assert.match(opened, /data-gcp-pane="place" hidden/);
   assert.match(opened, /id="gcp-chart"/);
+  assert.ok(opened.indexOf('id="gcp-stages"') < opened.indexOf('id="gcp-chart"'));
+  assert.match(opened, /id="gcp-range"/);
+  assert.match(opened, /id="gcp-stage-pager"/);
+  assert.match(opened, /id="gcp-chart-pager"/);
+  assert.match(opened, /value="6h" selected/);
   assert.match(opened, /id="gcp-every"/);
   assert.match(opened, /value="30" selected/);
   assert.equal(opened.includes("One image. Four places."), false);
@@ -1225,8 +1503,15 @@ test("a person configures Cloud Run on the GCP tab and the result stays there", 
   assert.match(stayed, /Checking the Google account/);
   const spanish = designerHtml(project, { ...page, lang: "es", shipTarget: "gcp" }, true, undefined, "", layout, layout, false, undefined, ship);
   assert.match(spanish, /Instancias mínimas/);
+  assert.match(spanish, /Dejar CPU y memoria asignadas/);
+  assert.match(opened, /id="gcp-cpu-always"[^>]*checked/);
   assert.match(spanish, /Actualizar/);
-  assert.match(spanish, /Latencia/);
+  assert.match(spanish, /Cada mensaje, desde que entra hasta que responde/);
+  assert.match(spanish, /Rango/);
+  assert.match(spanish, /Anteriores/);
+  assert.match(spanish, /Recientes/);
+  assert.match(spanish, /Parar/);
+  assert.match(phrase("es", "Stopped. Nothing new was published. Deploy starts again from the beginning."), /empieza otra vez desde el principio/);
   assert.match(spanish, /Preparación/);
   assert.match(spanish, /Variables de entorno planas/);
   assert.equal(/data-ship-panel="gcp" hidden/.test(spanish), false);
@@ -1279,6 +1564,23 @@ test("a person configures Cloud Run on the GCP tab and the result stays there", 
   assert.match(args, /--concurrency 2/);
   assert.match(args, /--cpu 2/);
   assert.match(args, /--memory 2Gi/);
+  assert.match(args, / --no-cpu-throttling/);
+  assert.equal(/ --cpu-throttling/.test(args), false);
+  assert.equal(saved.cpuAlways, true);
+  const throttled = cloudRunPlan({
+    agentName: project.name,
+    project: "my-project",
+    region: "us-central1",
+    imageId: id,
+    exposure: "internet",
+    hasPublicChannel: true,
+    secretNames: [],
+    cpuAlways: false,
+  });
+  if ("error" in throttled) throw new Error(throttled.error);
+  const throttledArgs = cloudRunArgs(throttled.plan).join(" ");
+  assert.match(throttledArgs, / --cpu-throttling/);
+  assert.equal(throttledArgs.includes("--no-cpu-throttling"), false);
   assert.match(args, /--timeout 600/);
   assert.match(args, /--set-env-vars LOG_LEVEL=info/);
   assert.match(args, /TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest/);
@@ -1341,8 +1643,15 @@ test("a person configures Cloud Run on the GCP tab and the result stays there", 
   assert.match(before[0].text, /Build it here/);
   const after = gcpChecks({ imageId: pinned, project: "mistratos", region: "us-central1", secrets: [{ name: "CURSOR_API_KEY", configured: true }] });
   assert.equal(after.every((row) => row.ok), true);
-  const found = composeImageId(`[{"ID":"sha256:${"e8".repeat(32)}","Repository":"prueba-2-agent"}]`);
+  const found = composeImageId(`[{"ID":"sha256:${"e8".repeat(32)}","Repository":"prueba-2-agent","ContainerName":"prueba-2-agent-1"}]`);
   assert.equal(found, `sha256:${"e8".repeat(32)}`);
+  const newer = `sha256:${"f4".repeat(32)}`;
+  const older = `sha256:${"35".repeat(32)}`;
+  const picked = composeImageId(JSON.stringify([
+    { ID: older, Repository: "sha256", ContainerName: "sqlite-crash-probe" },
+    { ID: newer, Repository: "prueba-2-agent", ContainerName: "prueba-2-agent-1" },
+  ]));
+  assert.equal(picked, newer);
   let pushed = consoleAppend("", "The push refers to repository [desk]\n");
   pushed = consoleAppend(pushed, "2135c70dc831: Preparing\r");
   pushed = consoleAppend(pushed, "2135c70dc831: Pushing 12MB/80MB\r");
@@ -1381,6 +1690,12 @@ test("a person configures Cloud Run on the GCP tab and the result stays there", 
   assert.equal(releasedImage(release || { url: "", revision: "", ready: "", created: "", image: "" }), "us-central1-docker.pkg.dev/mistratos/bigagent/desk:abababababab");
   assert.equal(releasedImage({ url: "", revision: "desk-00004", ready: "desk-00004", created: "desk-00007", image: "us-central1-docker.pkg.dev/mistratos/bigagent/desk:ffffffffffff" }), "");
   assert.equal(serviceMissing("ERROR: (gcloud.run.services.describe) Resource was not found"), true);
+  assert.equal(serviceMissing("ERROR: (gcloud.run.services.describe) Cannot find service [bigagent-telegram-desk]"), true);
+  assert.equal(cloudRunDescribeFailure("ERROR: (gcloud.run.services.describe) Cannot find service [bigagent-telegram-desk]"), "missing");
+  assert.equal(cloudRunDescribeFailure("ERROR: You do not currently have an active account selected.\n"), "auth");
+  assert.equal(cloudRunDescribeFailure("ERROR: (gcloud.run.services.describe) PERMISSION_DENIED: Permission 'run.services.get' denied"), "denied");
+  assert.match(phrase("es", "Cloud Run has no service bigagent-telegram-desk in project mistratos, region us-central1. It was deleted or never published. Deploy creates it. This is not a Google sign-in error."), /no tiene el servicio bigagent-telegram-desk/);
+  assert.match(phrase("es", "This Google account cannot read Cloud Run in project mistratos. Sign in with an account that has access, or choose another project."), /no puede leer Cloud Run/);
   const traffic = parseTrafficRevision('{"status":{"url":"https://desk-abc.run.app","traffic":[{"revisionName":"desk-00001","percent":0},{"revisionName":"desk-00004","percent":100}]}}');
   assert.equal(traffic?.revision, "desk-00004");
   assert.equal(traffic?.url, "https://desk-abc.run.app");

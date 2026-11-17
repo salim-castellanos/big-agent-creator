@@ -48,9 +48,9 @@ Al inicializar entran Agent y Limits. Un disparador cuya flecha no llega a Agent
 
 `@grok/agent-sdk` `^0.6.0`. El generador escribe `package.json` con `"type": "module"`, esa dependencia y `zod`. Los archivos generados importan `zod/v4`. El Dockerfile hace `npm install` y arranca `agent-sdk serve --mode single`. La ruta pública de un canal es `POST /v1/channels/<nombre>/`.
 
-No se escribe `local: { sandbox: true }`. Esta imagen no ejecuta el sandbox. Sí se escribe `local: { cwd: "/srv/agent/bot" }` y un `.cursorignore` con `node_modules`. Sin eso, cada turno en Cloud Run recorre `node_modules` buscando reglas y tarda unos 18 s antes de contestar. Si `bot/agent.ts` lo tiene igual, `deliveryCheck` lo nombra y **Start** queda apagado. Si falta `"type": "module"`, el `npm install` o el modo single, Start también queda apagado.
+No se escribe `local: { sandbox: true }`. Esta imagen no ejecuta el sandbox. Sí se escribe `local: { workspaceDir: "/srv/agent/bot" }` y el Dockerfile hace `git init` de esa carpeta. El runtime busca reglas subiendo hasta la raíz git más cercana. Sin esa raíz recorre toda la imagen, `node_modules` incluido, y un turno tarda decenas de segundos antes del modelo. `cwd` no sirve: abre una carpeta distinta por mensaje y el índice no se reutiliza. `.cursorignore` con `node_modules` se sigue escribiendo. Si `bot/agent.ts` activa el sandbox, `deliveryCheck` lo nombra y **Start** queda apagado. Si falta `"type": "module"`, el `npm install`, el modo single o el `git init`, Start también queda apagado.
 
-Un aviso de OpenTelemetry dentro del SDK no se parchea aquí. El SDK 0.6.0 todavía usa el paquete que avisa.
+Un aviso de OpenTelemetry dentro del SDK no se parchea aquí. El SDK 0.6.0 todavía usa el paquete que avisa. Los tiempos medidos, qué se puede cachear y qué falta en el monitor están en `docs/demoras.md`.
 
 ## Secretos, imagen y chat local
 

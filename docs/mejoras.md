@@ -2,7 +2,7 @@
 
 Historial de lo que ya quedó en el código, y por qué. Es insumo para seguir la plataforma o para sacar una aplicación independiente de VS Code. No es una lista de ideas.
 
-`LECCIONES.md` guarda dolores de ejecutar. Este archivo guarda mejoras hechas. `GAPS.md` guarda huecos del molde.
+`LECCIONES.md` guarda dolores de ejecutar. Este archivo guarda mejoras hechas. `GAPS.md` guarda huecos del molde. `docs/demoras.md` guarda los tiempos medidos del runtime y lo que un SDK futuro tiene que hacer distinto.
 
 ## Cómo se anota
 
@@ -67,6 +67,30 @@ Una mejora entra aquí en el mismo cambio que entra en `apps/`. Sin versión, si
 | dónde | `armSave` y `markSaved` en `designer.ts` |
 | prueba | La prueba del agente afirma el texto `Saving…` en la página. |
 | producto | Editor del flujo. Una acción principal confirma en el mismo control. |
+
+### lienzo-006
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.94 |
+| tipo | lienzo |
+| qué | La llamada generada al MCP devuelve `{ ok, text }` y compila con el SDK. Una herramienta puede nombrar una conexión de host (`mcp:pager:send`) además de un MCP. Tres agentes de prueba (reloj, operaciones y revisión) salen del lienzo con modelo, esfuerzo, CPU siempre asignada o recortada, y el comando de Cloud Run. |
+| por qué | Devolver el resultado crudo de `callTool` no pasa el compilador del SDK. Un agente con varias tarjetas no se había probado junto: canal, habilidad, herramienta, MCP, host, agenda, gancho y subagente. |
+| dónde | `emitSdk` y la revisión de nombres en `project.ts`, la prueba `three canvas agents` |
+| prueba | Los tres agentes quedan listos al poner los secretos, el comando de despliegue lleva el flag de CPU que corresponde, y `tsc --noEmit` sale 0 en los tres. |
+| producto | El generador. Un flujo complejo se arma con las mismas tarjetas. |
+
+### lienzo-005
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.93 |
+| tipo | lienzo |
+| qué | Una herramienta con `calls` `mcp:servidor:herramienta` genera `ctx.host.mcp.callTool`. El ejemplo **Clock desk** es la mesa de Telegram más el reloj público `https://time.now/mcp`. La habilidad pide la hora y la herramienta llama a `get_current_time`. El host `time.now` entra en la salida de la imagen. |
+| por qué | El lienzo ya dibujaba el MCP, y la herramienta generada devolvía la entrada sin llamar al servidor. Hacía falta un ejemplo que se pueda cargar y preguntar la hora. `tools/call` de ese reloj respondió en 516 ms. |
+| dónde | `mcpTarget` y `emitSdk` en `project.ts`, `examples/clock-desk` |
+| prueba | Guardar en el lienzo un MCP `clock` y una herramienta `mcp:clock:get_current_time` escribe `callTool("clock", "get_current_time", input)` y permite salir a `time.now`. Clock desk queda listo para servir con los mismos secretos que Telegram desk. |
+| producto | El generador del flujo y la plantilla. Cualquier canal puede usar la misma flecha hacia un MCP. |
 
 ### lienzo-004
 
@@ -259,6 +283,210 @@ Una mejora entra aquí en el mismo cambio que entra en `apps/`. Sin versión, si
 | dónde | `cloudRunArgs` |
 | prueba | El comando de un plan con mínimo 1 y máximo 2 incluye `run.googleapis.com/minScale=1,run.googleapis.com/maxScale=2`. |
 | producto | Operación de GCP. |
+
+### despliegue-010
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.77 |
+| tipo | despliegue |
+| qué | Mientras construye o despliega, **Parar** mata el proceso y el árbol de procesos. **Desplegar** vuelve a empezar desde el principio. Una subida cortada no publica el servicio. |
+| por qué | La imagen se quedaba en `Preparing` y no había forma de cortarla. Había que cerrar el editor. |
+| dónde | `cancelJob` y `killTree` en `extension.ts`. El mismo corte de árbol vale para el build local. |
+| prueba | La página de despliegue afirma `id="gcp-stop"`. En español el aviso de parada dice que empieza otra vez desde el principio. |
+| producto | Operación. El mismo control vale para una subida larga en cualquier nube: una etapa a la vez, se puede cortar, y el siguiente intento no hereda el proceso muerto. |
+
+### despliegue-011
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.78 |
+| tipo | despliegue |
+| qué | La imagen usa `node:22.13-slim`, instala el Agent SDK una sola vez, borra la caché de npm y corre como el usuario `node`. `.dockerignore` deja fuera `out`, `dist`, `coverage`, `.cursor`, `evals` y los `.vsix`. |
+| por qué | La imagen era Node completo y el SDK estaba instalado dos veces, en el proyecto y en global. Eso alarga la subida y el arranque. Los secretos siguen fuera. El bearer y `--allow-anonymous` no cambian. |
+| dónde | `dockerFile` y `writeDocker` |
+| prueba | El Dockerfile generado afirma `node:22.13-slim`, el binario local y `USER node`, y no afirma `npm install -g`. |
+| producto | La imagen que corre el agente, en local y en cualquier nube. |
+
+### monitor-007
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.79 |
+| tipo | monitor |
+| qué | La cifra grande es la espera desde el último mensaje sin respuesta. Aceptación y p95 quedan con ese nombre y siguen siendo los milisegundos del webhook. La preparación, si el log la trae, se ve al lado. |
+| por qué | p95 de 8 ms se leía como el tiempo de la respuesta. El webhook ya había contestado 200 y la persona seguía esperando. |
+| dónde | `monitorFacts`, `agentSignal`, `paintChart` |
+| prueba | Un webhook a las 03:13:26 leído a las 03:14:11, sin `replied in`, da 45000 ms de espera y el aviso dice 45 s y 8 ms. |
+| producto | Observabilidad. |
+
+### monitor-008
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.80 |
+| tipo | monitor |
+| qué | Además de la aceptación, hay una barra por interacción partida en aceptación, preparación, modelo y lo que sigue en curso. Los trozos suman el tiempo de esa interacción. |
+| por qué | La aceptación de 8 ms no decía en qué se iba el resto de la espera. |
+| dónde | `interactionStages`, `#gcp-stages` |
+| prueba | Una llamada de 8 ms con 18000 ms de reglas, leída 45 s después, deja 26992 ms en curso. Con `replied in 20000ms`, el modelo es 1992 ms y ya no queda nada en curso. |
+| producto | Observabilidad. Sirve para cualquier canal que deje una llamada HTTP y, si los escribe, los tiempos de reglas y de respuesta. |
+
+### monitor-009
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.90 |
+| tipo | monitor |
+| qué | Cada fila es un mensaje, con el canal y la hora local. El total va de `[canal] turn started` al instante del log `replied in`, no al número de milisegundos de esa línea. La fila se parte en aceptación, preparación, modelo y lo que sigue en curso. Las cuatro cifras de arriba son ese último mensaje. La leyenda ya no dice undefined. |
+| por qué | El número de `replied in` no se reinicia en cada mensaje, así que la barra verde crecía a 148 s, 245 s y 295 s aunque el mensaje hubiera durado menos. La tercera cifra decía UNDEFINED porque el nombre no estaba en el texto de la pantalla. |
+| dónde | `interactionStages` en `project.ts`, `paintStages` en `designer.ts` |
+| prueba | Un `replied in 999999ms` a los 20 s del `turn started`, con 4 s de reglas, deja 16 s de modelo. El mensaje de WhatsApp que sigue, sin respuesta, queda en curso 10 s y no hereda los 999999 ms. |
+| producto | Observabilidad. La fila sale del canal que escribió el turno (Telegram, WhatsApp o Slack). |
+
+### monitor-010
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.91 |
+| tipo | monitor |
+| qué | Un rango (15 min, 1 h, 6 h, 24 h o desde/hasta) filtra la gráfica de cada mensaje y la de solicitudes. Cada una pagina: 6 mensajes y 12 solicitudes. Al abrir, y al cambiar el rango, se ve la página más reciente. El log se vuelve a leer con esa ventana, hasta 400 líneas. |
+| por qué | Las filas crecían hacia abajo y no había forma de mirar solo un tramo. La gráfica de solicitudes no seguía el mismo recorte. |
+| dónde | `monitorFreshness` en `project.ts`, el rango y los paginadores en `designer.ts`, `readServiceLogs` en `extension.ts` |
+| prueba | Nueve `turn started` siguen siendo nueve filas. `24h` pide frescura `1d`. Un desde de 90 min pide `2h`. La página en español tiene Rango, Anteriores y Recientes, y la gráfica de mensajes queda encima de la de solicitudes. |
+| producto | Observabilidad. El mismo rango y la misma página corta sirven para cualquier canal. |
+
+### agente-003
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.81 |
+| tipo | agente |
+| qué | Guardar escribe `local: { workspaceDir: "/srv/agent/bot" }`. Si el Dockerfile todavía arranca con `serve --dir /srv/agent`, Guardar también lo reescribe. Un Dockerfile distinto se deja como está. |
+| por qué | `cwd` abre `/srv/agent/bot/<sesión>` en cada mensaje. El índice no se reutiliza (`servedFromCache: false`) y, sin raíz git, el runtime camina hasta la raíz del disco. En la revisión `00001-zt9` eso fueron 48 s de preparación y 6 min 33 s hasta terminar el turno. |
+| dónde | `emitSdk` en `project.ts` |
+| prueba | El canal de Telegram afirma `workspaceDir` y que no queda `local: { cwd:`. Guardar sobre un Dockerfile viejo vuelve a escribir `git init`. Un `FROM scratch` no se toca. |
+| producto | La carpeta del agente. Entra en la imagen al guardar, construir y desplegar. La imagen ya publicada no cambia hasta ese ciclo. |
+
+### despliegue-012
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.81 |
+| tipo | despliegue |
+| qué | La imagen instala `git` y ejecuta `git init --quiet /srv/agent/bot`. `node_modules` queda al lado, fuera de esa raíz. El `chown` ya no recorre `node_modules`. |
+| por qué | El harness corta el recorrido en la raíz git más cercana. La imagen anterior no tenía ninguna, así que cada turno recorría `node_modules`. |
+| dónde | `dockerFile` en `project.ts` |
+| prueba | El Dockerfile generado contiene `git init --quiet /srv/agent/bot`. Sin esa línea, `deliveryCheck` devuelve `docker-git`. |
+| producto | La imagen. Hay que construirla y desplegarla. Instalar el plugin no cambia la revisión que ya sirve. |
+
+### despliegue-013
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.82 |
+| tipo | despliegue |
+| qué | Al arrancar, la imagen crea `/var/lib/agent-sdk`, se lo entrega a `node` con `setpriv` y solo entonces ejecuta `serve`. |
+| por qué | Compose monta un volumen de root encima de esa carpeta. Con el proceso ya en `node`, el arranque murió con `EACCES` al abrir `platform-schedule-names.json`. El aviso de `--allow-anonymous` y el de GitHub no detienen el proceso. |
+| dónde | `dockerFile` en `project.ts` |
+| prueba | El Dockerfile generado contiene `setpriv --reuid=node` y `chown node:node /var/lib/agent-sdk`, y no deja `USER node` antes del comando. |
+| producto | La imagen. Hay que construirla de nuevo. La revisión que ya sirve no cambia hasta el despliegue. |
+
+### despliegue-014
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.83 |
+| tipo | despliegue |
+| qué | La pestaña de GCP y el pliegue del log se recuerdan. Una línea nueva baja el log solo si ya estabas al final. Guardar el mismo Dockerfile no vuelve a escribir el archivo. |
+| por qué | Mientras la consola escribía, cada escritura del Dockerfile disparaba otro render. Monitoreo volvía a Estado, Subir se deshacía y el log saltaba al final. |
+| dónde | `designer.ts`, `emitSdk`, el vigilante de `extension.ts` |
+| prueba | El HTML trae `gcpPane` y `followGcpLog`. Un segundo `emitSdk` no cambia la fecha del Dockerfile. |
+| producto | La pantalla de despliegue. Hace falta instalar el plugin. La imagen no cambia. |
+
+### despliegue-015
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.84 |
+| tipo | despliegue |
+| qué | Al arrancar, `chown -R` entrega a `node` la carpeta de estado y los archivos que ya están dentro. |
+| por qué | El volumen ya tenía `platform-schedule-names.json` de root, modo 644. Cambiar el dueño de la carpeta no alcanza: `node` no puede abrir ese archivo y `serve` sale con `EACCES`. |
+| dónde | `dockerFile` en `project.ts` |
+| prueba | El Dockerfile generado contiene `chown -R node:node /var/lib/agent-sdk`. |
+| producto | La imagen. Hay que construirla de nuevo. El volumen de PRUEBA-2 ya quedó con el dueño corregido. |
+
+### despliegue-016
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.85 |
+| tipo | despliegue |
+| qué | Actualizar distingue tres respuestas de gcloud: el servicio no existe, no hay cuenta activa, o la cuenta no puede leer el proyecto. |
+| por qué | `Cannot find service [bigagent-telegram-desk]` se mostraba como «No se pudo leer la imagen que sirve Cloud Run». El servicio se había borrado. La cuenta sí contestó. |
+| dónde | `cloudRunDescribeFailure` en `project.ts`, `showLiveImage` en `extension.ts` |
+| prueba | Ese error de gcloud es `missing`. Una cuenta ausente es `auth`. `PERMISSION_DENIED` es `denied`. La frase en español nombra el servicio, el proyecto y la región, y dice que no es un error de sesión. |
+| producto | La pantalla de GCP. Hace falta instalar el plugin. No cambia la imagen. |
+
+### despliegue-017
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.86 |
+| tipo | despliegue |
+| qué | Antes de soltar el proceso a `node`, el arranque pone `HOME=/home/node`. |
+| por qué | El servicio ya escuchaba. El calentado de reglas intentó crear `/root/.cursor/...` y `node` no puede escribir en el home de root. El log fue `could not warm /srv/agent/bot: EACCES`. |
+| dónde | `dockerFile` en `project.ts` |
+| prueba | El Dockerfile generado contiene `HOME=/home/node`. |
+| producto | La imagen. Hay que construirla de nuevo. |
+
+### despliegue-018
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.87 |
+| tipo | despliegue |
+| qué | La imagen parte de `node:22.23.5-slim`. |
+| por qué | Con Node 22.13.1 el proceso escuchaba, abría la SQLite experimental y moría con código 139 (señal 11). La misma carpeta y el mismo estado, con Node 22.23.5, siguen en marcha y calientan `/srv/agent/bot` en 2 s. Las reglas locales tardaron 282 ms. |
+| dónde | `dockerFile` en `project.ts` |
+| prueba | El Dockerfile generado contiene `node:22.23.5-slim`. El arranque con la credencial, medido aparte, no sale 139. |
+| producto | La imagen. Hay que construirla de nuevo. |
+
+### agente-004
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.88 |
+| tipo | agente |
+| qué | El menú de modelo incluye Grok 4.7, además de Grok 4.5 y Composer 2.5. Guardar escribe `id: "grok-4.7"`. |
+| por qué | Auto ya es grok-4.7 con esfuerzo alto. La lista no dejaba elegir esa versión ni bajar el esfuerzo sobre ella para probar si la espera es el razonamiento. |
+| dónde | `NAMED_MODELS` en `project.ts`, el menú de la tarjeta Agente |
+| prueba | Guardar `grok-4.7` con esfuerzo bajo deja ese id y `value: "low"` en `bot/agent.ts`. |
+| producto | La carpeta del agente. Entra al guardar, construir y desplegar. |
+
+### despliegue-019
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.89 |
+| tipo | despliegue |
+| qué | Desplegar toma la imagen del servicio `agent` de Compose, no la primera fila de `compose images`. |
+| por qué | Construir dejó `prueba-2-agent` nueva (Node 22.23.5 y grok-4.7). Desplegar publicó el digest viejo `16198ed5` porque en la lista también estaba otro contenedor. Cloud Run creó la revisión 00003 con esa imagen y siguió muriendo con la señal 11. |
+| dónde | `composeImageId` en `project.ts` |
+| prueba | Si la primera fila es un contenedor suelto y la segunda es `prueba-2-agent-1`, el id elegido es el de `prueba-2-agent-1`. |
+| producto | El botón Desplegar. Hay que instalar el plugin y pulsar Desplegar otra vez. La imagen buena ya está construida en la máquina. |
+
+### despliegue-020
+
+| Campo | Valor |
+| --- | --- |
+| versión | 0.2.92 |
+| tipo | despliegue |
+| qué | En Escala hay una casilla, encendida de origen: dejar CPU y memoria asignadas. Desplegar manda `--no-cpu-throttling`. Si se apaga, manda `--cpu-throttling`. |
+| por qué | El canal responde 200 y sigue el modelo en `waitUntil`. Con el recorte, Cloud Run quita la CPU en cuanto cierra esa petición. En la revisión `00009-c2c` (4 CPU, recorte activo) los mensajes de las 15:15 a las 15:27 tardaron 14 s a 70 s sin recorrer reglas. |
+| dónde | `cpuAlways` en `GcpLink`, la casilla `gcp-cpu-always`, `cloudRunArgs` |
+| prueba | Un plan sin el campo pide `--no-cpu-throttling`. La página en español muestra la casilla encendida. |
+| producto | La pantalla de escala y el comando de Cloud Run. Sirve en cualquier canal que conteste el webhook y siga trabajando. |
 
 ### monitor-001
 

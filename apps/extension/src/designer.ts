@@ -1,5 +1,5 @@
 import { exampleText, phrase, studioText, t, type CopyKey, type Lang } from "./copy";
-import { cardNeeds, CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, flowReport, defaultGcpLink, GCP_CPUS, GCP_MEMORY, gcpChecks, gcpPreview, GUIDE_URL, readImagePin, GUIDE_URL_ES, hasPublicChannel, hookSecretReach, LIBRARY_KINDS, proposalLabel, publicChannelUrl, readGcpLink, review, runSignals, slackReach, telegramReach, TRIGGER_TYPES, whatsappReach, type CardNeed, type Item, type Kind, type Layout, type Project, type Proposal, type Scan, type Studio } from "./project";
+import { cardNeeds, CHANNEL_NEEDS, deliveryCheck, EXAMPLES, executionSteps, flowLinks, flowReport, defaultGcpLink, GCP_CPUS, GCP_MEMORY, gcpChecks, gcpPreview, GUIDE_URL, readImagePin, GUIDE_URL_ES, hasPublicChannel, hookSecretReach, LIBRARY_KINDS, proposalLabel, publicChannelUrl, readGcpLink, review, runSignals, slackReach, telegramReach, TRIGGER_TYPES, NAMED_MODELS, whatsappReach, type CardNeed, type Item, type Kind, type Layout, type Project, type Proposal, type Scan, type Studio } from "./project";
 
 export type ShipStats = { cpu: string; memory: string; healthMs: number | null };
 
@@ -250,7 +250,7 @@ function inspector(project: Project, selected: string, lang: Lang): string {
       .join("");
     return `<p class="eyebrow">${kindLabel(lang, "agent")}</p><h2>${esc(project.name)}</h2><p class="path">bot/agent.ts · instructions.md</p>
       <p class="hint">${t(lang, "agent_hint")}</p>
-      <label>${t(lang, "model")}<select id="model"><option value="auto" ${project.model === "auto" ? "selected" : ""}>Auto</option><option value="grok-4.5" ${project.model === "grok-4.5" ? "selected" : ""}>Grok 4.5</option><option value="composer-2.5" ${project.model === "composer-2.5" ? "selected" : ""}>Composer 2.5</option></select></label>
+      <label>${t(lang, "model")}<select id="model"><option value="auto" ${project.model === "auto" ? "selected" : ""}>Auto</option>${NAMED_MODELS.map((id) => `<option value="${id}" ${project.model === id ? "selected" : ""}>${id === "grok-4.7" ? "Grok 4.7" : id === "grok-4.5" ? "Grok 4.5" : "Composer 2.5"}</option>`).join("")}</select></label>
       <label>${t(lang, "effort")}<select id="effort"><option value="low" ${project.effort === "low" ? "selected" : ""}>${t(lang, "low")}</option><option value="medium" ${project.effort === "medium" ? "selected" : ""}>${t(lang, "medium")}</option><option value="high" ${project.effort === "high" ? "selected" : ""}>${t(lang, "high")}</option></select></label>
       <label class="check"><input id="fast" type="checkbox" ${project.fast ? "checked" : ""} /> ${t(lang, "fast")}</label>
       <p class="hint">${t(lang, "auto_hint")}</p>
@@ -582,8 +582,8 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
   const verdictHtml = `<p id="gcp-verdict" class="verdict ${esc(held?.step || "")}"${held?.text ? "" : " hidden"}>${esc(held?.text || "")}</p>`;
   const trailHtml = `<ol id="gcp-trail">${(ui.gcpTrail || []).map((line) => `<li>${esc(line)}</li>`).join("")}</ol>`;
   const gcpTabs = `<div class="gcp-sub" role="tablist"><button type="button" class="on" data-gcp-tab="status" role="tab" aria-selected="true">${t(lang, "gcp_tab_status")}</button><button type="button" data-gcp-tab="place" role="tab" aria-selected="false">${t(lang, "gcp_tab_place")}</button><button type="button" data-gcp-tab="scale" role="tab" aria-selected="false">${t(lang, "gcp_tab_scale")}</button><button type="button" data-gcp-tab="secrets" role="tab" aria-selected="false">${t(lang, "gcp_tab_secrets")}</button><button type="button" data-gcp-tab="env" role="tab" aria-selected="false">${t(lang, "gcp_tab_env")}</button><button type="button" data-gcp-tab="monitor" role="tab" aria-selected="false">${t(lang, "gcp_tab_monitor")}</button></div>`;
-  const gcpCard = `<div class="gcp-pane" data-gcp-pane="status"><div class="localbar" id="gcp-live"><header><span class="statusline" data-state="${gcpState}"><span data-gcp-label>${gcpLabel}</span></span><strong>${esc(project?.name || "")}</strong><span class="where">GCP</span></header>${verdictHtml}<p id="gcp-image" class="path"${preview.image ? "" : " hidden"}>${esc(t(lang, "image_pin"))} ${esc(preview.image)}</p><p id="gcp-service" class="path">${esc(t(lang, "gcp_publishes"))} ${esc(preview.service)}</p><p id="gcp-target" class="path"${preview.target ? "" : " hidden"}>${esc(preview.target)}</p><p id="gcp-summary">${esc(phrase(lang, preview.summary))}</p><ul id="gcp-checks" class="scan">${checkList}</ul><p id="gcp-clock" class="hint" hidden></p><p class="path"><a id="gcp-url" href="${esc(preview.url || "#")}"${preview.url ? "" : " hidden"}>${esc(preview.url)}</a></p><div class="row"><button type="button" id="gcp-build">${t(lang, "gcp_build")}</button><button type="button" id="gcp-deploy" class="primary">${t(lang, "gcp_deploy")}</button><button type="button" id="gcp-check">${t(lang, "gcp_check")}</button><button type="button" id="gcp-refresh">${t(lang, "gcp_live")}</button></div>${trailHtml}</div></div>`;
-  const gcpForm = `<div id="gcp-form"><div class="gcp-pane" data-gcp-pane="place" hidden><label>${t(lang, "gcp_project")}<input id="gcp-project" value="${esc(gcp.project)}" placeholder="my-project" autocomplete="off" /></label><label>${t(lang, "gcp_region")}<input id="gcp-region" value="${esc(gcp.region)}" placeholder="us-central1" autocomplete="off" /></label><fieldset class="exposure"><label><input type="radio" name="gcp-exposure" value="internet"${gcpExposure === "internet" ? " checked" : ""} /> ${t(lang, "gcp_internet")}</label><p class="hint">${t(lang, "gcp_internet_h")}</p><label><input type="radio" name="gcp-exposure" value="internal"${gcpExposure === "internal" ? " checked" : ""} /> ${t(lang, "gcp_internal")}</label><p class="hint">${t(lang, "gcp_internal_h")}</p></fieldset></div><div class="gcp-pane" data-gcp-pane="scale" hidden><div class="scale"><label>${t(lang, "gcp_min")}<input id="gcp-min" type="number" min="0" max="20" step="1" value="${gcp.minInstances}" /></label><label>${t(lang, "gcp_max")}<input id="gcp-max" type="number" min="1" max="100" step="1" value="${gcp.maxInstances}" /></label><label>${t(lang, "gcp_concurrency")}<input id="gcp-concurrency" type="number" min="1" max="80" step="1" value="${gcp.concurrency}" /></label><label>${t(lang, "gcp_cpu")}<select id="gcp-cpu">${optionList(GCP_CPUS, gcp.cpu)}</select></label><label>${t(lang, "gcp_memory")}<select id="gcp-memory">${optionList(GCP_MEMORY, gcp.memory)}</select></label><label>${t(lang, "gcp_timeout")}<input id="gcp-timeout" type="number" min="15" max="3600" step="1" value="${gcp.timeout}" /></label></div><p class="hint">${t(lang, "gcp_scale_h")}</p></div><div class="gcp-pane" data-gcp-pane="secrets" hidden><div class="row"><h3>${t(lang, "gcp_secrets")}</h3><button type="button" id="gcp-sync">${t(lang, "gcp_sync")}</button></div><p class="hint">${t(lang, "gcp_secrets_h")}</p><ul class="secrets">${secretRows}</ul></div><div class="gcp-pane" data-gcp-pane="env" hidden><h3>${t(lang, "gcp_env")}</h3><p class="hint">${t(lang, "gcp_env_h")}</p><div id="gcp-env-list">${envRows}</div><div class="row"><button type="button" id="gcp-env-add">${t(lang, "gcp_env_add")}</button></div></div><div class="gcp-pane mon" data-gcp-pane="monitor" hidden><header class="mon-head"><div><p class="kicker">${t(lang, "gcp_tab_monitor")}</p><strong id="gcp-signal-headline" data-state="stopped">${esc(t(lang, "gcp_signal_empty"))}</strong></div><div class="mon-tools"><label>${t(lang, "gcp_every")}<select id="gcp-every" aria-label="${esc(t(lang, "gcp_every"))}"><option value="0">${t(lang, "gcp_every_off")}</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label><button type="button" id="gcp-logs" class="primary">${t(lang, "gcp_logs")}</button></div></header><div id="gcp-meters"></div><figure class="chart-card"><figcaption>${t(lang, "gcp_chart_title")}</figcaption><div id="gcp-chart" class="chart"></div><p class="legend"><i class="ok"></i>${t(lang, "gcp_accepted")}<i class="miss"></i>${t(lang, "gcp_waiting")}<i class="bad"></i>${t(lang, "gcp_rejected")}</p></figure><div class="mon-read"><p id="gcp-signal-webhook"></p><p id="gcp-signal-turn"></p><p id="gcp-signal-advice"></p></div><p class="hint">${t(lang, "gcp_monitor_h")}</p><p class="path">${gcp.url ? `<a href="${esc(gcp.url)}">${esc(gcp.url)}</a>` : esc(t(lang, "gcp_no_url"))}</p><ul class="scan"><li>${esc(t(lang, "gcp_min"))} ${gcp.minInstances} · ${esc(t(lang, "gcp_max"))} ${gcp.maxInstances}</li><li>${esc(gcp.cpu)} CPU · ${esc(gcp.memory)} · ${gcp.timeout}s</li>${gcp.minInstances === 0 && gcpExposure === "internet" ? `<li class="miss">${esc(t(lang, "gcp_cold"))}</li>` : ""}</ul></div></div>`;
+  const gcpCard = `<div class="gcp-pane" data-gcp-pane="status"><div class="localbar" id="gcp-live"><header><span class="statusline" data-state="${gcpState}"><span data-gcp-label>${gcpLabel}</span></span><strong>${esc(project?.name || "")}</strong><span class="where">GCP</span></header>${verdictHtml}<p id="gcp-image" class="path"${preview.image ? "" : " hidden"}>${esc(t(lang, "image_pin"))} ${esc(preview.image)}</p><p id="gcp-service" class="path">${esc(t(lang, "gcp_publishes"))} ${esc(preview.service)}</p><p id="gcp-target" class="path"${preview.target ? "" : " hidden"}>${esc(preview.target)}</p><p id="gcp-summary">${esc(phrase(lang, preview.summary))}</p><ul id="gcp-checks" class="scan">${checkList}</ul><p id="gcp-clock" class="hint" hidden></p><p class="path"><a id="gcp-url" href="${esc(preview.url || "#")}"${preview.url ? "" : " hidden"}>${esc(preview.url)}</a></p><div class="row"><button type="button" id="gcp-build">${t(lang, "gcp_build")}</button><button type="button" id="gcp-deploy" class="primary">${t(lang, "gcp_deploy")}</button><button type="button" id="gcp-stop" disabled>${t(lang, "gcp_stop")}</button><button type="button" id="gcp-check">${t(lang, "gcp_check")}</button><button type="button" id="gcp-refresh">${t(lang, "gcp_live")}</button></div>${trailHtml}</div></div>`;
+  const gcpForm = `<div id="gcp-form"><div class="gcp-pane" data-gcp-pane="place" hidden><label>${t(lang, "gcp_project")}<input id="gcp-project" value="${esc(gcp.project)}" placeholder="my-project" autocomplete="off" /></label><label>${t(lang, "gcp_region")}<input id="gcp-region" value="${esc(gcp.region)}" placeholder="us-central1" autocomplete="off" /></label><fieldset class="exposure"><label><input type="radio" name="gcp-exposure" value="internet"${gcpExposure === "internet" ? " checked" : ""} /> ${t(lang, "gcp_internet")}</label><p class="hint">${t(lang, "gcp_internet_h")}</p><label><input type="radio" name="gcp-exposure" value="internal"${gcpExposure === "internal" ? " checked" : ""} /> ${t(lang, "gcp_internal")}</label><p class="hint">${t(lang, "gcp_internal_h")}</p></fieldset></div><div class="gcp-pane" data-gcp-pane="scale" hidden><div class="scale"><label>${t(lang, "gcp_min")}<input id="gcp-min" type="number" min="0" max="20" step="1" value="${gcp.minInstances}" /></label><label>${t(lang, "gcp_max")}<input id="gcp-max" type="number" min="1" max="100" step="1" value="${gcp.maxInstances}" /></label><label>${t(lang, "gcp_concurrency")}<input id="gcp-concurrency" type="number" min="1" max="80" step="1" value="${gcp.concurrency}" /></label><label>${t(lang, "gcp_cpu")}<select id="gcp-cpu">${optionList(GCP_CPUS, gcp.cpu)}</select></label><label>${t(lang, "gcp_memory")}<select id="gcp-memory">${optionList(GCP_MEMORY, gcp.memory)}</select></label><label>${t(lang, "gcp_timeout")}<input id="gcp-timeout" type="number" min="15" max="3600" step="1" value="${gcp.timeout}" /></label></div><label class="check"><input id="gcp-cpu-always" type="checkbox"${gcp.cpuAlways ? " checked" : ""} /> ${t(lang, "gcp_cpu_always")}</label><p class="hint">${t(lang, "gcp_cpu_always_h")}</p><p class="hint">${t(lang, "gcp_scale_h")}</p></div><div class="gcp-pane" data-gcp-pane="secrets" hidden><div class="row"><h3>${t(lang, "gcp_secrets")}</h3><button type="button" id="gcp-sync">${t(lang, "gcp_sync")}</button></div><p class="hint">${t(lang, "gcp_secrets_h")}</p><ul class="secrets">${secretRows}</ul></div><div class="gcp-pane" data-gcp-pane="env" hidden><h3>${t(lang, "gcp_env")}</h3><p class="hint">${t(lang, "gcp_env_h")}</p><div id="gcp-env-list">${envRows}</div><div class="row"><button type="button" id="gcp-env-add">${t(lang, "gcp_env_add")}</button></div></div><div class="gcp-pane mon" data-gcp-pane="monitor" hidden><header class="mon-head"><div><p class="kicker">${t(lang, "gcp_tab_monitor")}</p><strong id="gcp-signal-headline" data-state="stopped">${esc(t(lang, "gcp_signal_empty"))}</strong></div><div class="mon-tools"><label>${t(lang, "gcp_range")}<select id="gcp-range" aria-label="${esc(t(lang, "gcp_range"))}"><option value="15m">${t(lang, "gcp_range_15")}</option><option value="1h">${t(lang, "gcp_range_1h")}</option><option value="6h" selected>${t(lang, "gcp_range_6h")}</option><option value="24h">${t(lang, "gcp_range_24h")}</option><option value="custom">${t(lang, "gcp_range_custom")}</option></select></label><label>${t(lang, "gcp_every")}<select id="gcp-every" aria-label="${esc(t(lang, "gcp_every"))}"><option value="0">${t(lang, "gcp_every_off")}</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label><button type="button" id="gcp-logs" class="primary">${t(lang, "gcp_logs")}</button></div></header><div class="mon-custom" id="gcp-custom" hidden><label>${t(lang, "gcp_from")}<input id="gcp-from" type="datetime-local" /></label><label>${t(lang, "gcp_to")}<input id="gcp-to" type="datetime-local" /></label></div><div id="gcp-meters"></div><figure class="chart-card" id="gcp-stages-card"><figcaption>${t(lang, "gcp_stages_title")}</figcaption><div id="gcp-stages" class="chart"></div><p class="legend" id="gcp-stage-legend"></p><div class="pager" id="gcp-stage-pager"><button type="button" id="gcp-stage-older">${t(lang, "gcp_older")}</button><span id="gcp-stage-page"></span><button type="button" id="gcp-stage-newer">${t(lang, "gcp_newer")}</button></div></figure><figure class="chart-card" id="gcp-chart-card"><figcaption>${t(lang, "gcp_chart_title")}</figcaption><div id="gcp-chart" class="chart"></div><p class="legend" id="gcp-legend"></p><div class="pager" id="gcp-chart-pager"><button type="button" id="gcp-chart-older">${t(lang, "gcp_older")}</button><span id="gcp-chart-page"></span><button type="button" id="gcp-chart-newer">${t(lang, "gcp_newer")}</button></div></figure><div class="mon-read"><p id="gcp-signal-webhook"></p><p id="gcp-signal-turn"></p><p id="gcp-signal-advice"></p></div><p class="hint">${t(lang, "gcp_monitor_h")}</p><p class="path">${gcp.url ? `<a href="${esc(gcp.url)}">${esc(gcp.url)}</a>` : esc(t(lang, "gcp_no_url"))}</p><ul class="scan"><li>${esc(t(lang, "gcp_min"))} ${gcp.minInstances} · ${esc(t(lang, "gcp_max"))} ${gcp.maxInstances}</li><li>${esc(gcp.cpu)} CPU · ${esc(gcp.memory)}${gcp.cpuAlways ? ` · ${esc(t(lang, "gcp_cpu_always"))}` : ""} · ${gcp.timeout}s</li>${gcp.minInstances === 0 && gcpExposure === "internet" ? `<li class="miss">${esc(t(lang, "gcp_cold"))}</li>` : ""}</ul></div></div>`;
   const deploy = project
     ? `<div class="sheet fill ship">
         <div class="ship-tabs" role="tablist"><button type="button" class="${shipTarget === "local" ? "on" : ""}" data-target="local" role="tab" aria-selected="${shipTarget === "local"}">${t(lang, "local")}</button><button type="button" class="${shipTarget === "gcp" ? "on" : ""}" data-target="gcp" role="tab" aria-selected="${shipTarget === "gcp"}">GCP</button><button type="button" class="${shipTarget === "aws" ? "on" : ""}" data-target="aws" role="tab" aria-selected="${shipTarget === "aws"}">AWS</button><button type="button" class="${shipTarget === "azure" ? "on" : ""}" data-target="azure" role="tab" aria-selected="${shipTarget === "azure"}">Azure</button></div>
@@ -911,6 +911,13 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .mon-tools { display: flex; gap: 8px; align-items: flex-end; flex: none; }
       .mon-tools label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
       .mon-tools select { text-transform: none; letter-spacing: 0; font-size: 13px; opacity: 1; }
+      .mon-custom { display: flex; gap: 8px; margin: 8px 0 0; }
+      .mon-custom[hidden] { display: none; }
+      .mon-custom label { display: flex; flex-direction: column; gap: 4px; margin: 0; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; opacity: .7; }
+      .mon-custom input { text-transform: none; letter-spacing: 0; font-size: 13px; opacity: 1; width: auto; }
+      .pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+      .pager span { font-size: 12px; opacity: .75; min-width: 4.5rem; text-align: center; }
+      .pager button { padding: 4px 8px; }
       .kpis { display: grid; gap: 8px; }
       .kpis.primary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .kpis.secondary { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 8px; }
@@ -927,6 +934,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       .legend i.ok { background: #22C55E; }
       .legend i.prep { background: #F5B942; }
       .legend i.accept { background: #38BDF8; }
+      .legend i.open { background: #8d93a3; }
       .legend i.miss { background: #F5B942; }
       .legend i.bad { background: #F04438; }
       .mon-read p { margin: 0 0 4px; font-size: 13px; line-height: 1.4; }
@@ -1031,10 +1039,16 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       chartReply: t(lang, "gcp_chart_title"),
       chartAccept: t(lang, "gcp_chart_accept"),
       latency: t(lang, "gcp_latency"),
+      wait: t(lang, "gcp_wait"),
+      acceptP95: t(lang, "gcp_accept_p95"),
       p95: t(lang, "gcp_p95"),
       errors: t(lang, "gcp_errors"),
       turnTime: t(lang, "gcp_turn"),
+      accept: t(lang, "gcp_accept"),
       prep: t(lang, "gcp_prep"),
+      thisMessage: t(lang, "gcp_this_message"),
+      model: t(lang, "gcp_model"),
+      open: t(lang, "gcp_stage_open"),
       noReply: t(lang, "gcp_no_reply"),
       accepted: t(lang, "gcp_accepted"),
       cut: t(lang, "gcp_cut"),
@@ -1158,31 +1172,31 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       foldGcpBottom.title = bottomHidden ? uiText.showRun : uiText.hideRunTitle;
       foldGcpBottom.setAttribute("aria-expanded", bottomHidden ? "false" : "true");
     };
+    const rememberView = (patch) => {
+      const prev = vscode.getState() || {};
+      vscode.setState(Object.assign({}, prev, patch));
+    };
+    const gcpFoldName = () => {
+      if (!gcpStack) return "";
+      if (gcpStack.classList.contains("fold-top")) return "top";
+      if (gcpStack.classList.contains("fold-bottom")) return "bottom";
+      return "";
+    };
     foldGcpTop?.addEventListener("click", () => {
       if (!gcpStack) return;
       if (gcpStack.classList.contains("fold-top")) gcpStack.classList.remove("fold-top");
       else { gcpStack.classList.add("fold-top"); gcpStack.classList.remove("fold-bottom"); }
       paintGcpFold();
+      rememberView({ gcpFold: gcpFoldName() });
+      requestAnimationFrame(() => { if (followGcpLog) pinLog("gcp-log"); });
     });
     foldGcpBottom?.addEventListener("click", () => {
       if (!gcpStack) return;
       if (gcpStack.classList.contains("fold-bottom")) gcpStack.classList.remove("fold-bottom");
       else { gcpStack.classList.add("fold-bottom"); gcpStack.classList.remove("fold-top"); }
       paintGcpFold();
+      rememberView({ gcpFold: gcpFoldName() });
     });
-    for (const tab of document.querySelectorAll("[data-gcp-tab]")) {
-      tab.addEventListener("click", () => {
-        const id = tab.dataset.gcpTab;
-        for (const button of document.querySelectorAll("[data-gcp-tab]")) {
-          const on = button.dataset.gcpTab === id;
-          button.classList.toggle("on", on);
-          button.setAttribute("aria-selected", on ? "true" : "false");
-        }
-        for (const pane of document.querySelectorAll("[data-gcp-pane]")) pane.hidden = pane.dataset.gcpPane !== id;
-        if (id === "monitor") { armWatch(); pullMonitor(false); }
-        else if (gcpWatch) { clearInterval(gcpWatch); gcpWatch = null; }
-      });
-    }
     for (const tab of document.querySelectorAll("[data-target]")) {
       tab.addEventListener("click", () => {
         const id = tab.dataset.target;
@@ -1220,6 +1234,7 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         concurrency: gcpNumber("gcp-concurrency", 4),
         cpu: document.getElementById("gcp-cpu")?.value || "1",
         memory: document.getElementById("gcp-memory")?.value || "1Gi",
+        cpuAlways: document.getElementById("gcp-cpu-always")?.checked === true,
         timeout: gcpNumber("gcp-timeout", 300),
         env,
         secretOverrides,
@@ -1227,13 +1242,20 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     };
     let gcpWatch = null;
     let gcpWatchBusy = false;
+    let heldStages = [];
+    let heldBars = [];
+    let heldFacts = null;
+    let stageFromEnd = 0;
+    let barFromEnd = 0;
     const pullMonitor = (manual) => {
       const pane = document.querySelector('[data-gcp-pane="monitor"]');
       if (!pane || pane.hidden || gcpWatchBusy) return;
       gcpWatchBusy = true;
       const line = document.getElementById("gcp-signal-headline");
       if (manual && line) { line.dataset.state = "busy"; line.textContent = uiText.reading; }
-      vscode.postMessage({ type: "gcp-logs", ...gcpFields() });
+      const range = document.getElementById("gcp-range")?.value || "6h";
+      const fromInput = Date.parse(document.getElementById("gcp-from")?.value || "");
+      vscode.postMessage({ type: "gcp-logs", ...gcpFields(), range, from: Number.isFinite(fromInput) ? fromInput : 0 });
     };
     const armWatch = () => {
       if (gcpWatch) clearInterval(gcpWatch);
@@ -1244,6 +1266,49 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     };
     document.getElementById("gcp-every")?.addEventListener("change", () => { armWatch(); pullMonitor(true); });
     document.getElementById("gcp-logs")?.addEventListener("click", () => pullMonitor(true));
+    const applyRange = () => {
+      const custom = document.getElementById("gcp-range")?.value === "custom";
+      const box = document.getElementById("gcp-custom");
+      if (box) box.hidden = !custom;
+      stageFromEnd = 0;
+      barFromEnd = 0;
+      repaintMonitor();
+      pullMonitor(true);
+    };
+    document.getElementById("gcp-range")?.addEventListener("change", applyRange);
+    document.getElementById("gcp-from")?.addEventListener("change", applyRange);
+    document.getElementById("gcp-to")?.addEventListener("change", applyRange);
+    const stepPage = (which, dir) => {
+      if (which === "stage") stageFromEnd = Math.max(0, stageFromEnd + dir);
+      else barFromEnd = Math.max(0, barFromEnd + dir);
+      repaintMonitor();
+    };
+    document.getElementById("gcp-stage-older")?.addEventListener("click", () => stepPage("stage", 1));
+    document.getElementById("gcp-stage-newer")?.addEventListener("click", () => stepPage("stage", -1));
+    document.getElementById("gcp-chart-older")?.addEventListener("click", () => stepPage("bar", 1));
+    document.getElementById("gcp-chart-newer")?.addEventListener("click", () => stepPage("bar", -1));
+    const showGcpPane = (id) => {
+      for (const button of document.querySelectorAll("[data-gcp-tab]")) {
+        const on = button.dataset.gcpTab === id;
+        button.classList.toggle("on", on);
+        button.setAttribute("aria-selected", on ? "true" : "false");
+      }
+      for (const pane of document.querySelectorAll("[data-gcp-pane]")) pane.hidden = pane.dataset.gcpPane !== id;
+      if (id === "monitor") { armWatch(); pullMonitor(false); }
+      else if (gcpWatch) { clearInterval(gcpWatch); gcpWatch = null; }
+    };
+    for (const tab of document.querySelectorAll("[data-gcp-tab]")) {
+      tab.addEventListener("click", () => {
+        const id = tab.dataset.gcpTab || "status";
+        showGcpPane(id);
+        rememberView({ gcpPane: id });
+      });
+    }
+    const savedView = vscode.getState() || {};
+    if (savedView.gcpFold === "top" && gcpStack) { gcpStack.classList.add("fold-top"); gcpStack.classList.remove("fold-bottom"); }
+    if (savedView.gcpFold === "bottom" && gcpStack) { gcpStack.classList.add("fold-bottom"); gcpStack.classList.remove("fold-top"); }
+    paintGcpFold();
+    if (savedView.gcpPane && savedView.gcpPane !== "status") showGcpPane(savedView.gcpPane);
     document.getElementById("gcp-env-add")?.addEventListener("click", () => {
       const list = document.getElementById("gcp-env-list");
       const sample = list?.querySelector("[data-env-row]");
@@ -1315,6 +1380,8 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       if (build) build.disabled = busy;
       const refresh = document.getElementById("gcp-refresh");
       if (refresh) refresh.disabled = busy;
+      const stop = document.getElementById("gcp-stop");
+      if (stop) stop.disabled = !busy;
     };
     document.getElementById("gcp-check")?.addEventListener("click", () => {
       armGcp(uiText.checking, "working");
@@ -1341,6 +1408,11 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
     document.getElementById("gcp-deploy")?.addEventListener("click", () => {
       armGcp(uiText.workingOn, "working", "working");
       vscode.postMessage({ type: "gcp-deploy", ...gcpFields() });
+    });
+    document.getElementById("gcp-stop")?.addEventListener("click", () => {
+      const stop = document.getElementById("gcp-stop");
+      if (stop) stop.disabled = true;
+      vscode.postMessage({ type: "gcp-stop" });
     });
     document.getElementById("open-playground")?.addEventListener("click", () => vscode.postMessage({ type: "ship", task: "playground" }));
     for (const button of document.querySelectorAll("[data-example]")) {
@@ -1738,12 +1810,33 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       button.textContent = uiText.saving;
     }
     let logLines = [];
+    let placingLog = false;
+    const heldFollow = vscode.getState() || {};
+    let followShipLog = heldFollow.followShipLog !== false;
+    let followGcpLog = heldFollow.followGcpLog !== false;
+    const pinLog = (id) => {
+      const pre = document.getElementById(id);
+      if (!pre) return;
+      placingLog = true;
+      pre.scrollTop = pre.scrollHeight;
+      placingLog = false;
+    };
+    const watchLog = (id, mark) => {
+      const pre = document.getElementById(id);
+      if (!pre) return;
+      pre.addEventListener("scroll", () => {
+        if (placingLog) return;
+        const near = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 48;
+        mark(near);
+      });
+    };
     function logRank(line) {
       if (/\\b(error|failed|failure|exception|panic)\\b/i.test(line)) return "error";
       if (/\\bwarn(?:ing)?\\b/i.test(line)) return "warn";
       return "info";
     }
     function paintLogs() {
+      placingLog = true;
       const pre = document.getElementById("ship-log");
       const query = (document.getElementById("log-search")?.value || "").toLowerCase();
       const level = document.getElementById("log-level")?.value || "all";
@@ -1766,12 +1859,17 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         const all = logLines.filter((line) => String(line).trim());
         cloud.textContent = all.join("\\n") || uiText.noLog;
       }
+      placingLog = false;
     }
     const logSeed = document.getElementById("log-seed");
     if (logSeed) {
       try { logLines = String(JSON.parse(logSeed.textContent || '""')).split(/\\n/); } catch (e) { logLines = []; }
       for (const id of ["log-search", "log-level", "log-from", "log-to"]) document.getElementById(id)?.addEventListener("input", paintLogs);
       paintLogs();
+      watchLog("ship-log", (near) => { followShipLog = near; rememberView({ followShipLog: near }); });
+      watchLog("gcp-log", (near) => { followGcpLog = near; rememberView({ followGcpLog: near }); });
+      if (followShipLog) pinLog("ship-log");
+      if (followGcpLog) pinLog("gcp-log");
     }
     function applyFace(face) {
       const live = document.getElementById("ship-live");
@@ -1850,6 +1948,151 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
       const refresh = document.getElementById("ship-refresh");
       if (refresh) refresh.disabled = !!face.refreshDisabled;
     }
+    function monitorBounds() {
+      const preset = document.getElementById("gcp-range")?.value || "6h";
+      const now = Date.now();
+      const span = { "15m": 15 * 60000, "1h": 3600000, "6h": 6 * 3600000, "24h": 24 * 3600000 };
+      if (preset === "custom") {
+        const from = Date.parse(document.getElementById("gcp-from")?.value || "");
+        const to = Date.parse(document.getElementById("gcp-to")?.value || "");
+        return { from: Number.isFinite(from) ? from : 0, to: Number.isFinite(to) ? to : now };
+      }
+      return { from: now - (span[preset] || span["6h"]), to: now };
+    }
+    function filterAt(rows) {
+      const bounds = monitorBounds();
+      return (Array.isArray(rows) ? rows : []).filter((row) => {
+        const at = Number(row && row.at) || 0;
+        if (!at) return false;
+        if (bounds.from && at < bounds.from) return false;
+        if (bounds.to && at > bounds.to) return false;
+        return true;
+      });
+    }
+    function takePage(rows, size, fromEnd) {
+      const pages = Math.max(1, Math.ceil(rows.length / size));
+      const newest = pages - 1;
+      const page = rows.length ? Math.max(0, Math.min(newest, newest - fromEnd)) : 0;
+      return { rows: rows.slice(page * size, page * size + size), page, pages, fromEnd: rows.length ? newest - page : 0 };
+    }
+    function paintPager(id, view, empty) {
+      const host = document.getElementById(id);
+      if (!host) return;
+      const buttons = host.querySelectorAll("button");
+      const label = host.querySelector("span");
+      if (label) label.textContent = empty ? "" : (view.page + 1) + " / " + view.pages;
+      if (buttons[0]) buttons[0].disabled = empty || view.page <= 0;
+      if (buttons[1]) buttons[1].disabled = empty || view.page >= view.pages - 1;
+    }
+    function paintMeters(pageStages, scopedBars, facts) {
+      const meters = document.getElementById("gcp-meters");
+      if (!meters) return;
+      const shown = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms";
+      const dash = "—";
+      const card = (name, value, tone) => '<article class="' + (tone || "") + '"><span>' + name + '</span><strong>' + value + '</strong></article>';
+      const last = pageStages.length ? pageStages[pageStages.length - 1] : null;
+      const total = last ? (Number(last.acceptMs) || 0) + (Number(last.prepMs) || 0) + (Number(last.modelMs) || 0) + (Number(last.openMs) || 0) : 0;
+      const rejected = scopedBars.filter((bar) => !bar.ok).length;
+      const primary = last
+        ? card(uiText.thisMessage, shown(total), last.openMs ? "wait" : "") + card(uiText.prep, shown(last.prepMs || 0), (last.prepMs || 0) >= 3000 ? "wait" : "") + card(uiText.model, last.modelMs ? shown(last.modelMs) : dash, "") + card(uiText.open, last.openMs ? shown(last.openMs) : dash, last.openMs ? "wait" : "")
+        : card(uiText.thisMessage, dash, "") + card(uiText.prep, dash, "") + card(uiText.model, dash, "") + card(uiText.open, dash, "");
+      meters.innerHTML = '<div class="kpis primary">' + primary + '</div><div class="kpis secondary">' + card(uiText.calls, String(scopedBars.length), "") + card(uiText.errors, String(rejected), rejected ? "bad" : "") + card(uiText.cut, String((facts && facts.interrupted) || 0), facts && facts.interrupted ? "wait" : "") + '</div>';
+    }
+    function paintStages(stages) {
+      const host = document.getElementById("gcp-stages");
+      const legend = document.getElementById("gcp-stage-legend");
+      if (!host) return;
+      if (legend) legend.innerHTML = '<i class="accept"></i>' + uiText.accept + '<i class="prep"></i>' + uiText.prep + '<i class="ok"></i>' + uiText.model + '<i class="open"></i>' + uiText.open;
+      const rows = Array.isArray(stages) ? stages : [];
+      if (!rows.length) {
+        host.innerHTML = '<p class="hint">' + uiText.noCalls + '</p>';
+        return;
+      }
+      const totals = rows.map((row) => (Number(row.acceptMs) || 0) + (Number(row.prepMs) || 0) + (Number(row.modelMs) || 0) + (Number(row.openMs) || 0));
+      const max = Math.max.apply(null, totals.concat([1]));
+      const h = 16 + rows.length * 36;
+      const left = 132;
+      const w = Math.max(360, host.clientWidth || 520);
+      const inner = w - left - 16;
+      const parts = ['<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" role="img">'];
+      rows.forEach((row, index) => {
+        const y = 8 + index * 36;
+        const when = row.at ? new Date(row.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+        const who = row.channel ? row.channel + " " + when : (when || row.label || "");
+        let x = left;
+        const segs = [[Number(row.acceptMs) || 0, "#38BDF8", uiText.accept], [Number(row.prepMs) || 0, "#F5B942", uiText.prep], [Number(row.modelMs) || 0, "#22C55E", uiText.model], [Number(row.openMs) || 0, "#8d93a3", uiText.open]];
+        parts.push('<text x="' + (left - 8) + '" y="' + (y + 15) + '" text-anchor="end" font-size="10" fill="currentColor" opacity="0.7">' + who + '</text>');
+        segs.forEach((seg) => {
+          const ms = seg[0];
+          if (ms <= 0) return;
+          const width = Math.max(2, inner * ms / max);
+          const label = ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms";
+          parts.push('<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + width.toFixed(1) + '" height="22" rx="3" fill="' + seg[1] + '"><title>' + seg[2] + " " + label + '</title></rect>');
+          if (width > 42) parts.push('<text x="' + (x + 6).toFixed(1) + '" y="' + (y + 15) + '" font-size="10" fill="#0b1220">' + label + '</text>');
+          x += width;
+        });
+      });
+      parts.push("</svg>");
+      host.innerHTML = parts.join("");
+    }
+    function paintChart(bars) {
+      const host = document.getElementById("gcp-chart");
+      if (!host) return;
+      const caption = document.querySelector("#gcp-chart-card figcaption");
+      if (caption) caption.textContent = uiText.chartAccept;
+      const legend = document.getElementById("gcp-legend");
+      if (legend) legend.innerHTML = '<i class="ok"></i>' + uiText.latency + '<i class="prep"></i>' + uiText.prep + '<i class="bad"></i>' + uiText.errors;
+      const rows = Array.isArray(bars) ? bars : [];
+      if (!rows.length) {
+        host.innerHTML = '<p class="hint">' + uiText.noCalls + '</p>';
+        return;
+      }
+      const values = rows.map((bar) => Math.round(Number(bar.ms) || 0)).sort((a, b) => a - b);
+      const slow = values.length ? values[values.length - 1] : 0;
+      const w = Math.max(360, host.clientWidth || 520);
+      const h = 196;
+      const left = 42;
+      const bottom = 28;
+      const top = 8;
+      const max = Math.max(slow, 1);
+      const ticks = [0, Math.round(max / 2), max];
+      const inner = w - left - 12;
+      const bw = Math.min(22, Math.max(8, (inner / rows.length) - 10));
+      const gap = (inner - bw * rows.length) / (rows.length + 1);
+      const yOf = (ms) => top + (h - bottom - top) * (1 - ms / max);
+      const parts = ['<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" role="img">'];
+      ticks.forEach((tick) => {
+        const y = yOf(tick);
+        parts.push('<line x1="' + left + '" y1="' + y + '" x2="' + (w - 8) + '" y2="' + y + '" stroke="currentColor" stroke-opacity="0.15"/>');
+        const tickLabel = max >= 1000 ? (tick / 1000).toFixed(tick >= 10000 ? 0 : 1) + "s" : String(tick);
+        parts.push('<text x="' + (left - 6) + '" y="' + (y + 3) + '" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55">' + tickLabel + '</text>');
+      });
+      rows.forEach((bar, index) => {
+        const ms = Math.round(Number(bar.ms) || 0);
+        const bh = Math.max(3, (h - bottom) - yOf(ms));
+        const x = left + gap + index * (bw + gap);
+        const y = (h - bottom) - bh;
+        const color = !bar.ok ? "#F04438" : ms >= 1000 ? "#F5B942" : "#22C55E";
+        const when = bar.at ? new Date(bar.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : (bar.label || "");
+        parts.push('<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="3" fill="' + color + '"><title>' + when + " " + ms + ' ms</title></rect>');
+        if (rows.length <= 8) parts.push('<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">' + when + '</text>');
+      });
+      parts.push("</svg>");
+      host.innerHTML = parts.join("");
+    }
+    function repaintMonitor() {
+      const stages = filterAt(heldStages);
+      const bars = filterAt(heldBars);
+      const stageView = takePage(stages, 6, stageFromEnd);
+      const barView = takePage(bars, 12, barFromEnd);
+      stageFromEnd = stageView.fromEnd;
+      barFromEnd = barView.fromEnd;
+      paintStages(stageView.rows);
+      paintChart(barView.rows);
+      paintMeters(stageView.rows, bars, heldFacts);
+      paintPager("gcp-stage-pager", stageView, stages.length === 0);
+      paintPager("gcp-chart-pager", barView, bars.length === 0);
+    }
     let savedWait;
     window.addEventListener("message", (event) => {
       const data = event.data || {};
@@ -1866,65 +2109,12 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         }
         if (status) status.textContent = data.status || "";
       }
-      function paintChart(bars, measure, facts) {
-        const host = document.getElementById("gcp-chart");
-        const meters = document.getElementById("gcp-meters");
-        if (!host) return;
-        const rows = Array.isArray(bars) ? bars : [];
-        const values = rows.map((bar) => Math.round(Number(bar.ms) || 0)).sort((a, b) => a - b);
-        const slow = values.length ? values[values.length - 1] : 0;
-        const shown = (ms) => ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms";
-        const dash = "—";
-        const caption = document.querySelector(".chart-card figcaption");
-        if (caption) caption.textContent = uiText.chartAccept;
-        const legend = document.querySelector(".chart-card .legend");
-        if (legend) legend.innerHTML = '<i class="ok"></i>' + uiText.latency + '<i class="prep"></i>' + uiText.prep + '<i class="bad"></i>' + uiText.errors;
-        if (meters && facts) {
-          const card = (name, value, tone) => '<article class="' + (tone || "") + '"><span>' + name + '</span><strong>' + value + '</strong></article>';
-          const prep = Number(facts.prepMs) || 0;
-          const turn = Number(facts.replyMedianMs) || 0;
-          const accept = Number(facts.acceptMedianMs) || 0;
-          const p95 = Number(facts.acceptP95Ms) || 0;
-          const requests = Number(facts.calls) || 0;
-          meters.innerHTML = '<div class="kpis primary">' + card(uiText.calls, String(requests), "") + card(uiText.errors, String(facts.rejected || 0), facts.rejected ? "bad" : "") + card(uiText.latency, requests ? shown(accept) : dash, accept >= 1000 ? "wait" : "") + card(uiText.p95, requests ? shown(p95) : dash, p95 >= 1000 ? "wait" : "") + '</div><div class="kpis secondary">' + card(uiText.turnTime, turn ? shown(turn) : dash, turn >= 8000 ? "wait" : "") + card(uiText.prep, prep ? shown(prep) : dash, prep >= 3000 ? "wait" : "") + card(uiText.cut, String(facts.interrupted || 0), facts.interrupted ? "wait" : "") + '</div>';
-        }
-        if (!rows.length) {
-          host.innerHTML = '<p class="hint">' + uiText.noCalls + '</p>';
-          return;
-        }
-        const w = Math.max(360, host.clientWidth || 520);
-        const h = 196;
-        const left = 42;
-        const bottom = 28;
-        const top = 8;
-        const max = Math.max(slow, 1);
-        const ticks = [0, Math.round(max / 2), max];
-        const inner = w - left - 12;
-        const bw = Math.min(22, Math.max(8, (inner / rows.length) - 10));
-        const gap = (inner - bw * rows.length) / (rows.length + 1);
-        const yOf = (ms) => top + (h - bottom - top) * (1 - ms / max);
-        const parts = ['<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" role="img">'];
-        ticks.forEach((tick) => {
-          const y = yOf(tick);
-          parts.push('<line x1="' + left + '" y1="' + y + '" x2="' + (w - 8) + '" y2="' + y + '" stroke="currentColor" stroke-opacity="0.15"/>');
-          const tickLabel = max >= 1000 ? (tick / 1000).toFixed(tick >= 10000 ? 0 : 1) + "s" : String(tick);
-          parts.push('<text x="' + (left - 6) + '" y="' + (y + 3) + '" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55">' + tickLabel + '</text>');
-        });
-        rows.forEach((bar, index) => {
-          const ms = Math.round(Number(bar.ms) || 0);
-          const bh = Math.max(3, (h - bottom) - yOf(ms));
-          const x = left + gap + index * (bw + gap);
-          const y = (h - bottom) - bh;
-          const color = !bar.ok ? "#F04438" : ms >= 1000 ? "#F5B942" : "#22C55E";
-          parts.push('<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="3" fill="' + color + '"><title>' + (bar.label || "") + " " + ms + ' ms</title></rect>');
-          if (rows.length <= 8) parts.push('<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (h - 8) + '" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">' + (bar.label || "") + '</text>');
-        });
-        parts.push("</svg>");
-        host.innerHTML = parts.join("");
-      }
       if (data.type === "gcp-signal") {
         gcpWatchBusy = false;
-        paintChart(data.bars, data.measure, data.facts);
+        heldStages = Array.isArray(data.stages) ? data.stages : [];
+        heldBars = Array.isArray(data.bars) ? data.bars : [];
+        heldFacts = data.facts || null;
+        repaintMonitor();
         const headline = document.getElementById("gcp-signal-headline");
         if (headline) {
           headline.dataset.state = data.kind === "error" ? "failed" : "running";
@@ -2006,19 +2196,16 @@ export function designerHtml(project: Project | null, ui: Ui, hasFolder = true, 
         if (data.replace) logLines = String(data.text || "").split(/\\n/).filter((line) => String(line).trim());
         else String(data.text || "").split(/\\n/).forEach((line) => { if (line) logLines.push(line); });
         paintLogs();
-        for (const id of ["ship-log", "gcp-log"]) {
-          const pre = document.getElementById(id);
-          if (pre) pre.scrollTop = pre.scrollHeight;
-        }
+        if (followShipLog) pinLog("ship-log");
+        if (followGcpLog) pinLog("gcp-log");
       }
       if (data.type === "ship-face") {
         applyFace(data.face);
         if (typeof data.logs === "string" && data.logs.trim()) {
-          const pre = document.getElementById("ship-log");
-          const stick = !pre || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 48;
           logLines = data.logs.split(/\\n/);
           paintLogs();
-          if (stick && pre) pre.scrollTop = pre.scrollHeight;
+          if (followShipLog) pinLog("ship-log");
+          if (followGcpLog) pinLog("gcp-log");
         }
       }
       if (data.type === "hint") {

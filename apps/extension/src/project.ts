@@ -290,7 +290,8 @@ export function loadProject(root: string): Project {
     known.add(name);
   }
   const legacy = meta.model === "fast" || meta.model === "strong" || meta.model === "auto" ? meta.model : "";
-  const model = meta.model === "grok-4.5" || meta.model === "composer-2.5" ? meta.model : legacy === "fast" || legacy === "strong" ? "grok-4.5" : "auto";
+  const named = namedModel(meta.model);
+  const model = named || (legacy === "fast" || legacy === "strong" ? "grok-4.5" : "auto");
   const effort = meta.effort === "low" || meta.effort === "medium" || meta.effort === "high" ? meta.effort : legacy === "fast" ? "low" : "high";
   const fast = typeof meta.fast === "boolean" ? meta.fast : legacy !== "strong";
   const harness = Array.isArray(meta.harness) ? meta.harness.filter((name) => HARNESS.includes(name)) : null;
@@ -595,7 +596,7 @@ export function review(project: Project): Finding[] {
         message: "Sandbox is recorded, but this local image cannot run it. The generator leaves it off so the chat still answers. Enabling it here fails every turn and Telegram stays silent.",
       });
     }
-  const mcpNames = new Set(project.items.filter((item) => item.kind === "mcp").map((item) => item.name));
+  const mcpNames = new Set(project.items.filter((item) => item.kind === "mcp" || item.kind === "host").map((item) => item.name));
   for (const item of project.items) {
     const id = `${item.kind}:${item.name}`;
     if (item.kind === "channel") {
@@ -610,8 +611,8 @@ export function review(project: Project): Finding[] {
     }
     if (item.kind === "tool" && !item.calls?.trim()) out.push({ id, message: "This tool does not say what it calls." });
     if (item.kind === "tool" && item.calls?.startsWith("mcp:")) {
-      const target = item.calls.slice(4).trim();
-      if (target && !mcpNames.has(target)) out.push({ id, message: `No MCP named ${target} is on this canvas.` });
+      const target = mcpTarget(item.calls);
+      if (target && !mcpNames.has(target.server)) out.push({ id, message: `No MCP named ${target.server} is on this canvas.` });
     }
     if (item.kind === "skill" && !item.description.trim()) out.push({ id, message: "This skill does not say when it loads." });
     if (item.kind === "schedule" && !item.route?.trim()) out.push({ id, message: "This schedule has no cron expression." });
@@ -629,6 +630,16 @@ export function review(project: Project): Finding[] {
 function effectOf(value: unknown): Effect {
   if (value === "write" || value === "idempotent" || value === "irreversible") return value;
   return "read";
+}
+
+function mcpTarget(calls: string): { server: string; tool: string } | null {
+  if (!calls.startsWith("mcp:")) return null;
+  const rest = calls.slice(4).trim();
+  const cut = rest.search(/[:/]/);
+  if (cut === -1) return rest ? { server: rest, tool: "" } : null;
+  const server = rest.slice(0, cut).trim();
+  const tool = rest.slice(cut + 1).trim();
+  return server ? { server, tool } : null;
 }
 
 function executionOf(value: unknown): Execution {
@@ -786,6 +797,13 @@ export function saveScope(root: string, scope: string): void {
   emitSdk(root);
 }
 
+/** Models the canvas may write. Auto is the absence of an id; the SDK then uses grok-4.7 with high effort. */
+export const NAMED_MODELS = ["grok-4.7", "grok-4.5", "composer-2.5"] as const;
+
+export function namedModel(value: unknown): string {
+  return typeof value === "string" && (NAMED_MODELS as readonly string[]).includes(value) ? value : "";
+}
+
 export function saveModel(root: string, model: string): void {
   saveAgentSettings(root, { model });
 }
@@ -803,7 +821,7 @@ export type AgentSettings = {
 
 export function saveAgentSettings(root: string, settings: AgentSettings): void {
   const meta = readJson<Record<string, unknown>>(marker(root), {});
-  const model = settings.model === "grok-4.5" || settings.model === "composer-2.5" ? settings.model : "auto";
+  const model = namedModel(settings.model) || "auto";
   const effort = settings.effort === "low" || settings.effort === "medium" || settings.effort === "high" ? settings.effort : meta.effort;
   const next: Record<string, unknown> = { ...meta, model };
   if (effort) next.effort = effort;
@@ -1086,6 +1104,12 @@ export const EXAMPLES: ExampleInfo[] = [
     level: "Next",
   },
   {
+    id: "clock-desk",
+    title: "Clock desk",
+    summary: "The Telegram desk, plus one public clock. Ask the time in a city. The answer comes from time.now.",
+    level: "MCP",
+  },
+  {
     id: "support-desk",
     title: "Support desk",
     summary: "An inbox webhook and a Monday schedule. Lookup, then a case, then a person. The image starts; the knowledge servers are not in this compose file.",
@@ -1204,16 +1228,21 @@ export function composeImageId(text: string): string | null {
   try {
     const body = JSON.parse(text) as unknown;
     const rows = Array.isArray(body) ? body : [body];
-    for (const row of rows) {
-      if (row && typeof row === "object" && "ID" in row && typeof row.ID === "string") {
-        const id = parseImageId(row.ID);
-        if (id) return id;
-      }
-    }
+    const found = rows.flatMap((row) => {
+      if (!row || typeof row !== "object" || !("ID" in row) || typeof row.ID !== "string") return [];
+      const id = parseImageId(row.ID);
+      if (!id) return [];
+      const repo = "Repository" in row && typeof row.Repository === "string" ? row.Repository : "";
+      const name = "ContainerName" in row && typeof row.ContainerName === "string" ? row.ContainerName : "";
+      return [{ id, repo, name }];
+    });
+    const agent = found.find((row) => row.repo !== "sha256" && /-agent-\d+$/.test(row.name));
+    if (agent) return agent.id;
+    const named = found.find((row) => row.repo !== "sha256" && row.repo !== "");
+    return named?.id ?? found[0]?.id ?? null;
   } catch {
     return parseImageId(text);
   }
-  return parseImageId(text);
 }
 
 export function readImagePin(root: string): string | null {
@@ -1247,6 +1276,7 @@ export type GcpLink = {
   concurrency: number;
   cpu: string;
   memory: string;
+  cpuAlways: boolean;
   timeout: number;
   env: GcpEnv[];
   url?: string;
@@ -1268,6 +1298,7 @@ export type CloudRunPlan = {
   concurrency: number;
   cpu: string;
   memory: string;
+  cpuAlways: boolean;
   timeout: number;
   secrets: string[];
   env: GcpEnv[];
@@ -1290,6 +1321,7 @@ export function defaultGcpLink(): GcpLink {
     concurrency: 4,
     cpu: "1",
     memory: "1Gi",
+    cpuAlways: true,
     timeout: 300,
     env: [],
     url: "",
@@ -1329,6 +1361,7 @@ export function readGcpLink(root: string): GcpLink {
       concurrency: concurrency !== null && concurrency >= 1 && concurrency <= 80 ? concurrency : fallback.concurrency,
       cpu: typeof body.cpu === "string" && GCP_CPUS.includes(body.cpu) ? body.cpu : fallback.cpu,
       memory: typeof body.memory === "string" && GCP_MEMORY.includes(body.memory) ? body.memory : fallback.memory,
+      cpuAlways: body.cpuAlways !== false,
       timeout: timeout !== null && timeout >= 15 && timeout <= 3600 ? timeout : fallback.timeout,
       env,
       url: typeof body.url === "string" && /^https:\/\/[a-z0-9.-]+\.run\.app$/i.test(body.url.trim()) ? body.url.trim() : "",
@@ -1352,6 +1385,7 @@ export function writeGcpLink(root: string, link: GcpLink): void {
     concurrency: link.concurrency,
     cpu: link.cpu,
     memory: link.memory,
+    cpuAlways: link.cpuAlways !== false,
     timeout: link.timeout,
     env: link.env.map((row) => ({ name: row.name, value: row.value })),
     url,
@@ -1368,6 +1402,7 @@ export function parseGcpLink(raw: {
   concurrency?: unknown;
   cpu?: unknown;
   memory?: unknown;
+  cpuAlways?: unknown;
   timeout?: unknown;
   env?: unknown;
 }): { link: GcpLink } | { error: string } {
@@ -1407,6 +1442,7 @@ export function parseGcpLink(raw: {
       concurrency,
       cpu,
       memory,
+      cpuAlways: raw.cpuAlways !== false && raw.cpuAlways !== "false",
       timeout,
       env,
       saved: true,
@@ -1528,8 +1564,18 @@ export function cloudRunImageMatch(localId: string, remoteImage: string, knownDi
   return "unknown";
 }
 
+export type DescribeFailure = "missing" | "auth" | "denied" | "failed";
+
+/** What a failed `gcloud run services describe` means for the person at the screen. */
+export function cloudRunDescribeFailure(text: string): DescribeFailure {
+  if (/Cannot find service|NOT_FOUND|\bnot found\b/i.test(text)) return "missing";
+  if (/UNAUTHENTICATED|Reauthentication failed|do not currently have an active account|Please log in|gcloud auth login/i.test(text)) return "auth";
+  if (/PERMISSION_DENIED|does not have permission|\bforbidden\b/i.test(text)) return "denied";
+  return "failed";
+}
+
 export function serviceMissing(text: string): boolean {
-  return /NOT_FOUND|\bnot found\b/i.test(text);
+  return cloudRunDescribeFailure(text) === "missing";
 }
 
 export function parseTrafficRevision(raw: string): { url: string; revision: string } | null {
@@ -1609,6 +1655,7 @@ export function cloudRunPlan(input: {
   concurrency?: number;
   cpu?: string;
   memory?: string;
+  cpuAlways?: boolean;
   timeout?: number;
   env?: GcpEnv[];
 }): { plan: CloudRunPlan } | { error: string } {
@@ -1628,6 +1675,7 @@ export function cloudRunPlan(input: {
     concurrency: input.concurrency ?? 4,
     cpu: input.cpu ?? "1",
     memory: input.memory ?? "1Gi",
+    cpuAlways: input.cpuAlways !== false,
     timeout: input.timeout ?? 300,
     env: input.env ?? [],
   });
@@ -1656,6 +1704,7 @@ export function cloudRunPlan(input: {
       concurrency: parsed.link.concurrency,
       cpu: parsed.link.cpu,
       memory: parsed.link.memory,
+      cpuAlways: parsed.link.cpuAlways,
       timeout: parsed.link.timeout,
       secrets,
       env: parsed.link.env,
@@ -1744,6 +1793,7 @@ export type MonitorFacts = {
   replyMedianMs: number;
   replySlowMs: number;
   modelMedianMs: number;
+  waitingMs: number;
 };
 
 function median(values: number[]): number {
@@ -1763,7 +1813,7 @@ function prepIn(text: string): number[] {
   return (text.match(/(?:durationMs|totalMs):\s*(\d+)/g) || []).map((item) => Number(item.replace(/\D/g, ""))).filter((value) => value > 0);
 }
 
-export function monitorFacts(entries: LogEntry[]): MonitorFacts {
+export function monitorFacts(entries: LogEntry[], now = Date.now()): MonitorFacts {
   const hooks = entries.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
   const accepted = hooks.filter((entry) => (entry.httpRequest?.status ?? 0) > 0 && (entry.httpRequest?.status ?? 0) < 400);
   const times = accepted.map((entry) => latencyMs(entry.httpRequest?.latency)).sort((left, right) => left - right);
@@ -1797,6 +1847,10 @@ export function monitorFacts(entries: LogEntry[]): MonitorFacts {
     }
   });
   const loosePrep = notes.flatMap((item) => prepIn(item.text));
+  const lastHook = orderedHooks.at(-1);
+  const lastAt = stamp(lastHook?.timestamp);
+  const repliedAfter = lastAt > 0 && notes.some((item) => item.at >= lastAt && /replied in \d+ms/i.test(item.text));
+  const waitingMs = lastAt > 0 && !repliedAfter ? Math.max(0, now - lastAt) : 0;
   return {
     calls: hooks.length,
     accepted: accepted.length,
@@ -1809,25 +1863,98 @@ export function monitorFacts(entries: LogEntry[]): MonitorFacts {
     replyMedianMs: median(replies),
     replySlowMs: replies.length ? Math.max(...replies) : 0,
     modelMedianMs: median(models),
+    waitingMs,
   };
+}
+
+export type StageSlice = { label: string; at: number; channel: string; acceptMs: number; prepMs: number; modelMs: number; openMs: number };
+
+function channelOf(text: string): string {
+  const match = text.match(/\[(telegram|whatsapp|slack)\]/i);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function sliceOf(start: number, endAt: number, total: number, prepMs: number, acceptMs: number, closed: boolean, channel: string): StageSlice {
+  const accept = Math.min(Math.max(0, acceptMs), total);
+  const prepare = Math.min(Math.max(0, prepMs), Math.max(0, total - accept));
+  const rest = Math.max(0, total - accept - prepare);
+  return {
+    label: channel || "msg",
+    at: start,
+    channel,
+    acceptMs: accept,
+    prepMs: prepare,
+    modelMs: closed ? rest : 0,
+    openMs: closed ? 0 : rest,
+  };
+}
+
+export function interactionStages(entries: LogEntry[], now = Date.now()): StageSlice[] {
+  const sorted = [...entries].sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
+  const notes = sorted.flatMap((entry) => entry.textPayload ? [{ at: stamp(entry.timestamp), text: entry.textPayload }] : []);
+  const hooks = sorted.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
+  const starts = notes.filter((item) => /turn started/i.test(item.text));
+  if (starts.length) {
+    return starts.map((start, index, rows) => {
+      const next = rows[index + 1]?.at ?? Number.POSITIVE_INFINITY;
+      const reply = notes.find((item) => item.at >= start.at && item.at < next && /replied in \d+ms/i.test(item.text));
+      const endAt = reply ? reply.at : Number.isFinite(next) ? next : now;
+      const total = Math.max(0, endAt - start.at);
+      const prep = notes.filter((item) => item.at >= start.at && item.at <= endAt).flatMap((item) => prepIn(item.text));
+      const hook = [...hooks].reverse().find((item) => {
+        const at = stamp(item.timestamp);
+        return at > 0 && at <= start.at && start.at - at < 120000;
+      });
+      return sliceOf(start.at, endAt, total, prep.length ? Math.max(...prep) : 0, latencyMs(hook?.httpRequest?.latency), Boolean(reply), channelOf(start.text));
+    });
+  }
+  return hooks.map((hook, index, rows) => {
+    const start = stamp(hook.timestamp);
+    const end = stamp(rows[index + 1]?.timestamp) || Number.POSITIVE_INFINITY;
+    const between = notes.filter((item) => item.at >= start && item.at < end);
+    const reply = between.map((item) => item.text.match(/replied in (\d+)ms/i)).find(Boolean);
+    const prep = between.flatMap((item) => prepIn(item.text));
+    const prepMs = prep.length ? Math.max(...prep) : 0;
+    const acceptMs = Math.max(0, Math.round(latencyMs(hook.httpRequest?.latency)));
+    const closed = reply ? Number(reply[1]) : 0;
+    const total = closed > 0 ? closed : Math.max(0, (Number.isFinite(end) ? end : now) - start);
+    const accept = Math.min(acceptMs, total);
+    const prepare = Math.min(prepMs, Math.max(0, total - accept));
+    const rest = Math.max(0, total - accept - prepare);
+    return sliceOf(start, end, total, prepare, accept, closed > 0, "");
+  });
+}
+
+export function monitorFreshness(range: string, from = 0, now = Date.now()): string {
+  if (range === "15m" || range === "1h" || range === "6h") return range;
+  if (range === "24h") return "1d";
+  if (range === "custom" && from > 0 && from <= now) {
+    const minutes = Math.max(1, Math.ceil((now - from) / 60000));
+    if (minutes > 7 * 1440) return "7d";
+    if (minutes >= 1440) return `${Math.ceil(minutes / 1440)}d`;
+    if (minutes >= 60) return `${Math.ceil(minutes / 60)}h`;
+    return `${minutes}m`;
+  }
+  return "6h";
 }
 
 export function monitorFilter(service: string, region: string): string {
   return `resource.type="cloud_run_revision" AND resource.labels.service_name="${service}" AND resource.labels.location="${region}" AND (httpRequest.requestUrl:"/v1/channels/" OR textPayload:"replied in" OR textPayload:"durationMs" OR textPayload:"totalMs" OR textPayload:"turn failed" OR textPayload:"turn started")`;
 }
 
-export function channelBars(entries: LogEntry[]): { ms: number; ok: boolean; label: string; kind: "accept" }[] {
+export function channelBars(entries: LogEntry[]): { ms: number; ok: boolean; label: string; kind: "accept"; at: number }[] {
   const sorted = [...entries].sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
   const hooks = sorted.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
-  return hooks.slice(-24).map((entry) => ({
+  return hooks.map((entry) => ({
     ms: latencyMs(entry.httpRequest?.latency),
     ok: (entry.httpRequest?.status ?? 0) > 0 && (entry.httpRequest?.status ?? 0) < 400,
     label: (entry.timestamp || "").slice(11, 19),
     kind: "accept" as const,
+    at: stamp(entry.timestamp),
   }));
 }
 
-export function agentSignal(entries: LogEntry[]): { headline: string; webhook: string; turn: string; advice: string; kind: "ok" | "error" } {
+export function agentSignal(entries: LogEntry[], now = Date.now()): { headline: string; webhook: string; turn: string; advice: string; kind: "ok" | "error" } {
   const sorted = [...entries].sort((left, right) => String(left.timestamp || "").localeCompare(String(right.timestamp || "")));
   const texts = sorted.flatMap((entry) => entry.textPayload ? [{ at: entry.timestamp || "", text: entry.textPayload }] : []);
   const hooks = sorted.filter((entry) => /\/v1\/channels\//.test(entry.httpRequest?.requestUrl || ""));
@@ -1892,7 +2019,7 @@ export function agentSignal(entries: LogEntry[]): { headline: string; webhook: s
       kind: "error",
     };
   }
-  const facts = monitorFacts(entries);
+  const facts = monitorFacts(entries, now);
   const prep = facts.prepMs ? `Loading rules took up to ${Math.round(facts.prepMs / 1000)}s.` : "No cancelled turn in this window.";
   if (facts.interrupted > 0) {
     return {
@@ -1904,11 +2031,15 @@ export function agentSignal(entries: LogEntry[]): { headline: string; webhook: s
     };
   }
   if (!texts.some((row) => /replied in \d+ms/i.test(row.text))) {
+    const waited = Math.max(1, Math.round(facts.waitingMs / 1000));
+    const accept = Math.max(0, Math.round(facts.acceptMedianMs));
     return {
-      headline: "The agent is answering. These numbers are how fast the webhook was accepted.",
+      headline: facts.waitingMs > 0
+        ? `The person has been waiting ${waited}s. Accepting the webhook took ${accept}ms. That is not the reply.`
+        : "The person is still waiting. These numbers are how fast the webhook was accepted, not the reply.",
       webhook,
       turn: prep,
-      advice: "A reply is not a failed call. The person waits while rules load and the model answers. A second message cancels that turn.",
+      advice: "Update again. The wait grows until the reply is logged. Rule loading, when it appears, is the slow stage. A second message cancels the turn.",
       kind: "ok",
     };
   }
@@ -1949,6 +2080,7 @@ export function cloudRunArgs(plan: CloudRunPlan): string[] {
     "--concurrency", String(plan.concurrency),
     "--cpu", plan.cpu,
     "--memory", plan.memory,
+    plan.cpuAlways ? "--no-cpu-throttling" : "--cpu-throttling",
     "--timeout", String(plan.timeout),
     plan.allowUnauthenticated ? "--allow-unauthenticated" : "--no-allow-unauthenticated",
   ];
@@ -1972,10 +2104,12 @@ export function shipArgs(task: "start" | "rebuild", hasPin: boolean, republish: 
 
 export function writeDocker(root: string, force = true): void {
   const write = (file: string, body: string) => {
-    if (force || !fs.existsSync(file)) fs.writeFileSync(file, body, "utf8");
+    if (!force && fs.existsSync(file)) return;
+    if (fs.existsSync(file) && fs.readFileSync(file, "utf8") === body) return;
+    fs.writeFileSync(file, body, "utf8");
   };
   const name = isProject(root) ? imageName(loadProject(root).name) : "bigagent-agent";
-  write(path.join(root, ".dockerignore"), ".env\n.env.*\n!.env.example\n.git\nnode_modules\n");
+  write(path.join(root, ".dockerignore"), ".env\n.env.*\n!.env.example\n.git\nnode_modules\nout\ndist\ncoverage\n.cursor\nevals\n*.vsix\n");
   write(path.join(root, "Dockerfile"), dockerFile());
   write(path.join(root, "compose.yaml"), composeFile(name, readImagePin(root) || ""));
   if (isProject(root)) ensurePackageJson(root, loadProject(root).name);
@@ -2027,6 +2161,12 @@ export function deliveryCheck(root: string): Finding[] {
         message: "Dockerfile serve command is missing --mode single. The public channel route is POST /v1/channels/<name>/ only in that mode.",
       });
     }
+    if (!/git init --quiet \/srv\/agent\/bot/.test(docker)) {
+      out.push({
+        id: "docker-git",
+        message: "Dockerfile does not make /srv/agent/bot its own git root. The runtime then walks the whole image, including node_modules, before it answers. Save again so the generator writes that git init.",
+      });
+    }
     const agentSource = path.join(root, "bot", "agent.ts");
     if (fs.existsSync(agentSource) && /sandbox:\s*true/.test(fs.readFileSync(agentSource, "utf8"))) {
       out.push({
@@ -2075,14 +2215,42 @@ function walkGenerated(dir: string, out: string[] = []): string[] {
 }
 
 function dockerFile(): string {
-  return `FROM node:22.13
+  return `FROM node:22.23.5-slim
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends git \\
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv/agent
+COPY package.json ./
+RUN npm install --omit=dev && npm cache clean --force && rm -rf /root/.npm
 COPY . .
-RUN npm install --omit=dev && npm install -g @grok/agent-sdk
+# The harness walks up to the nearest git root. Without one it walks the
+# whole image, including node_modules, on every turn. bot/ is that root.
+# node_modules stays beside it, outside the walk.
+RUN mkdir -p /srv/agent/bot /var/lib/agent-sdk \\
+ && git init --quiet /srv/agent/bot \\
+ && chown -R node:node /srv/agent/bot /var/lib/agent-sdk \\
+ && printf '%s\\n' \\
+    '#!/bin/sh' \\
+    'set -e' \\
+    'mkdir -p /var/lib/agent-sdk /home/node' \\
+    'if [ "$(id -u)" = "0" ]; then' \\
+    '  chown -R node:node /var/lib/agent-sdk /home/node' \\
+    '  export HOME=/home/node' \\
+    '  exec setpriv --reuid=node --regid=node --init-groups -- "$0"' \\
+    'fi' \\
+    'if [ -n "$AGENT_SDK_BEARER_TOKEN" ] && [ "$BIGAGENT_ADMIT_LOCAL" != "1" ]; then' \\
+    '  exec ./node_modules/.bin/agent-sdk serve --dir /srv/agent --host 0.0.0.0 --port 3000 --state-root /var/lib/agent-sdk --mode single --bearer-token "$AGENT_SDK_BEARER_TOKEN"' \\
+    'fi' \\
+    'exec ./node_modules/.bin/agent-sdk serve --dir /srv/agent --host 0.0.0.0 --port 3000 --state-root /var/lib/agent-sdk --mode single --allow-anonymous' \\
+    > /usr/local/bin/agent-start \\
+ && chmod 755 /usr/local/bin/agent-start
+ENV NODE_ENV=production
 EXPOSE 3000
-# Docker is not loopback inside the container, so localDevStrict returns 401.
-# BIGAGENT_ADMIT_LOCAL=1 admits this machine. Otherwise a bearer locks the API.
-CMD ["sh", "-c", "if [ -n \\"$AGENT_SDK_BEARER_TOKEN\\" ] && [ \\"$BIGAGENT_ADMIT_LOCAL\\" != \\"1\\" ]; then exec agent-sdk serve --dir /srv/agent --host 0.0.0.0 --port 3000 --state-root /var/lib/agent-sdk --mode single --bearer-token \\"$AGENT_SDK_BEARER_TOKEN\\"; else exec agent-sdk serve --dir /srv/agent --host 0.0.0.0 --port 3000 --state-root /var/lib/agent-sdk --mode single --allow-anonymous; fi"]
+# Compose mounts a root-owned volume on /var/lib/agent-sdk. The script gives
+# that directory to node, points HOME at /home/node, and only then starts
+# serve. The rules cache must not try to write under /root. A bearer locks the API.
+# BIGAGENT_ADMIT_LOCAL=1 admits this machine.
+CMD ["/usr/local/bin/agent-start"]
 `;
 }
 
@@ -2422,6 +2590,7 @@ export function emitSdk(root: string): void {
     keep.add(rel);
     const file = path.join(root, rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (fs.existsSync(file) && fs.readFileSync(file, "utf8") === body) return;
     fs.writeFileSync(file, body, "utf8");
   };
   const model =
@@ -2431,11 +2600,18 @@ export function emitSdk(root: string): void {
   const harness = project.harness ? `  tools: ${JSON.stringify(project.harness)},\n` : "";
   const turns = project.maxRunningTurns ? `  concurrency: { maxRunningTurns: ${project.maxRunningTurns} },\n` : "";
   const reminders = project.reminders ? `  builtinTools: { reminders: true },\n` : "";
+  const egress = [...new Set([
+    ...project.egress,
+    ...project.items.flatMap((item) => {
+      if ((item.kind !== "mcp" && item.kind !== "host") || !item.url) return [];
+      try { return [new URL(item.url).hostname]; } catch { return []; }
+    }),
+  ])];
   const hosting =
-    project.egress.length || project.secrets.length
-      ? `  hosting: { secretNames: ${JSON.stringify(project.secrets.map((row) => row.name))}, egressDomains: ${JSON.stringify(project.egress)} },\n`
+    egress.length || project.secrets.length
+      ? `  hosting: { secretNames: ${JSON.stringify(project.secrets.map((row) => row.name))}, egressDomains: ${JSON.stringify(egress)} },\n`
       : "";
-  const narrow = `  local: { cwd: "/srv/agent/bot" },\n`;
+  const narrow = `  local: { workspaceDir: "/srv/agent/bot" },\n`;
   write(
     "bot/agent.ts",
     `import { defineAgent } from "@grok/agent-sdk";\n\n// ${MARK}\nexport default defineAgent({\n  name: ${q(project.name)},\n${narrow}${model}${harness}${turns}${reminders}${hosting}});\n`,
@@ -2449,10 +2625,17 @@ export function emitSdk(root: string): void {
     if (item.kind === "tool") {
       const effect = item.effect === "irreversible" || item.effect === "idempotent" || item.effect === "write" ? item.effect === "irreversible" ? "write" : item.effect : "read";
       const approval = item.effect === "irreversible" ? `  needsApproval: true,\n` : "";
-      const body = item.body.trim() ? item.body.replace(/\n$/, "") : "  return input;";
+      const mcp = mcpTarget(item.calls || "");
+      const written = item.body.trim();
+      const placeholder = !written || /^return input;?$/.test(written);
+      const generated = Boolean(mcp?.tool && placeholder);
+      const body = generated
+        ? `  const result = await ctx.host.mcp.callTool(${q(mcp!.server)}, ${q(mcp!.tool)}, input);\n  const part = result.content.find((item) => item.type === "text");\n  const text = part && "text" in part && typeof part.text === "string" ? part.text : "";\n  return { ok: result.isError !== true, text };`
+        : written ? written.replace(/\n$/, "") : "  return input;";
+      const signature = generated ? "input, ctx" : "input";
       write(
         `bot/tools/${item.name}.ts`,
-        `import { defineTool } from "@grok/agent-sdk/tools";\nimport * as z from "zod/v4";\n\n// ${MARK}\nexport default defineTool({\n  description: ${q(item.description)},\n  execution: ${q(executionOf(item.execution))},\n  effect: ${q(effect)},\n${approval}  inputSchema: ${zodShape(item.parameters)},\n  async execute(input) {\n${body}\n  },\n});\n`,
+        `import { defineTool } from "@grok/agent-sdk/tools";\nimport * as z from "zod/v4";\n\n// ${MARK}\nexport default defineTool({\n  description: ${q(item.description)},\n  execution: ${q(executionOf(item.execution))},\n  effect: ${q(effect)},\n${approval}  inputSchema: ${zodShape(item.parameters)},\n  async execute(${signature}) {\n${body}\n  },\n});\n`,
       );
     }
     if (item.kind === "skill") {
@@ -2513,6 +2696,12 @@ export function emitSdk(root: string): void {
         fs.rmSync(path.join(root, "bot", "subagents", name), { recursive: true, force: true });
       }
     }
+  }
+  const dockerPath = path.join(root, "Dockerfile");
+  const dockerNow = fs.existsSync(dockerPath) ? fs.readFileSync(dockerPath, "utf8") : "";
+  if (!dockerNow || /serve --dir \/srv\/agent|"--dir", "\/srv\/agent"/.test(dockerNow)) {
+    const next = dockerFile();
+    if (next !== dockerNow) fs.writeFileSync(dockerPath, next, "utf8");
   }
 }
 

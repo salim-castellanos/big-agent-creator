@@ -1,0 +1,6 @@
+{
+  "url": "https://time.now/mcp",
+  "description": "Public clock. No token. get_current_time returns one IANA timezone.",
+  "transport": "http",
+  "advertise": false
+}

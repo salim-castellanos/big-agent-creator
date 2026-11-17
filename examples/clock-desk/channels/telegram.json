@@ -1,0 +1,7 @@
+{
+  "type": "telegram",
+  "description": "A person writes in the Telegram chat. The same chat keeps one conversation.",
+  "verify": true,
+  "route": "/",
+  "secret": "TELEGRAM_WEBHOOK_SECRET"
+}

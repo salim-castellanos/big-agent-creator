@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const source = path.resolve(here, "..", "..", "..", "examples");
 const dest = path.resolve(here, "..", "templates");
-const ids = ["hello", "telegram-desk", "support-desk", "change-gate"];
+const ids = ["hello", "telegram-desk", "clock-desk", "support-desk", "change-gate"];
 const skip = new Set(["node_modules", ".git", ".env", ".keep"]);
 
 function copy(from, to) {

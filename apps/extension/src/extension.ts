@@ -42,7 +42,7 @@ import {
   gcpPreview,
   shortImage,
   cloudRunImageMatch,
-  serviceMissing,
+  cloudRunDescribeFailure,
   parseServiceRelease,
   releasedImage,
   secretSyncPlan,
@@ -91,8 +91,10 @@ import {
   pickGcloud,
   agentSignal,
   channelBars,
+  interactionStages,
   monitorFacts,
   monitorFilter,
+  monitorFreshness,
   parseLogEntries,
   commandFailure,
   readCommandLog,
@@ -186,6 +188,9 @@ class Home implements vscode.WebviewViewProvider {
   private tunnelProc?: ChildProcess;
   private shipGen = 0;
   private gcpNote = "";
+  private jobToken = 0;
+  private jobOpen = false;
+  private jobChild?: ChildProcess;
   private gcpVerdict: { text: string; step: "current" | "other" | "unknown"; image: string } | null = null;
   private gcpTrail: string[] = [];
   private gcloudExe = "";
@@ -241,6 +246,7 @@ class Home implements vscode.WebviewViewProvider {
     );
     const kick = (uri: vscode.Uri) => {
       if (uri.fsPath.endsWith(`${path.sep}layout.json`)) return;
+      if (uri.fsPath.endsWith(`${path.sep}image.json`) || uri.fsPath.endsWith(`${path.sep}errors.json`)) return;
       const envFile = uri.fsPath.endsWith(`${path.sep}.env`) || uri.fsPath.endsWith(`${path.sep}.env.example`);
       if (this.watchTimer) clearTimeout(this.watchTimer);
       this.watchTimer = setTimeout(() => {
@@ -320,6 +326,7 @@ class Home implements vscode.WebviewViewProvider {
         return;
       }
       if (track) this.shipProc = child;
+      this.holdJob(child);
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           onChunk?.("Docker did not answer in time.\n");
@@ -540,7 +547,7 @@ class Home implements vscode.WebviewViewProvider {
   private async compose(root: string, args: string[], phase: "building" | "stopping" | "rebuilding"): Promise<void> {
     const gen = ++this.shipGen;
     this.stopLogFollow();
-    this.shipProc?.kill();
+    this.killTree(this.shipProc);
     const names = loadProject(root).secrets.map((row) => row.name);
     this.ship = {
       ...this.ship,
@@ -918,6 +925,7 @@ class Home implements vscode.WebviewViewProvider {
         finish(1);
         return;
       }
+      this.holdJob(child);
       const timer = timeoutMs > 0 ? setTimeout(() => {
         const message = "The command did not answer in time.\n";
         onChunk(message);
@@ -1016,6 +1024,10 @@ class Home implements vscode.WebviewViewProvider {
     if (this.gcpNote) this.gcpTrail = [...this.gcpTrail, this.gcpNote].slice(-8);
     if ((step === "current" || step === "other" || step === "unknown") && this.gcpNote) this.gcpVerdict = { text: this.gcpNote, step, image };
     const face = step || (kind === "working" ? "working" : "");
+    if (kind !== "working") {
+      this.jobOpen = false;
+      this.jobChild = undefined;
+    }
     this.panel?.webview.postMessage({ type: "gcp-status", text: this.gcpNote, kind, url, step: face, image, trail: this.gcpTrail });
   }
 
@@ -1106,11 +1118,39 @@ class Home implements vscode.WebviewViewProvider {
     this.gcpStatus(summary, synced > 0 && failed.length === 0 && plan.missing.length === 0 ? "ok" : "error");
   }
 
+  private killTree(child?: ChildProcess): void {
+    if (!child?.pid) return;
+    if (process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+    else child.kill();
+  }
+
+  private holdJob(child: ChildProcess): void {
+    if (this.jobOpen) this.jobChild = child;
+  }
+
+  private beginJob(): number {
+    this.killTree(this.jobChild);
+    this.jobChild = undefined;
+    this.jobToken += 1;
+    this.jobOpen = true;
+    return this.jobToken;
+  }
+
+  private cancelJob(): void {
+    this.jobToken += 1;
+    this.jobOpen = false;
+    this.killTree(this.jobChild);
+    this.jobChild = undefined;
+    this.killTree(this.shipProc);
+  }
+
   private async deployGcp(root: string, link: import("./project").GcpLink): Promise<void> {
+    const token = this.beginJob();
     const project = loadProject(root);
     const names = project.secrets.filter((row) => row.configured).map((row) => row.name);
     this.gcpStatus("Checking the local image.", "working");
     const imageId = await this.localImageId(root);
+    if (token !== this.jobToken) return;
     const built = cloudRunPlan({
       agentName: project.name,
       project: link.project,
@@ -1124,6 +1164,7 @@ class Home implements vscode.WebviewViewProvider {
       concurrency: link.concurrency,
       cpu: link.cpu,
       memory: link.memory,
+      cpuAlways: link.cpuAlways,
       timeout: link.timeout,
       env: link.env,
     });
@@ -1136,6 +1177,7 @@ class Home implements vscode.WebviewViewProvider {
     const short = shortImage(imageId || "");
     this.gcpStatus("Checking the Google account.", "working");
     const account = await this.googleAccount(root);
+    if (token !== this.jobToken) return;
     if ("error" in account) {
       this.gcpStatus(account.error, "error");
       return;
@@ -1145,10 +1187,18 @@ class Home implements vscode.WebviewViewProvider {
     this.gcpStatus("Checking whether Cloud Run already runs this image.", "working");
     const live = await this.liveRevision(root, built.plan.project, built.plan.region, built.plan.service);
     const match = live.image ? await this.matchServing(root, built.plan.project, built.plan.region, built.plan.service, imageId || "", live.image) : "unknown";
+    if (token !== this.jobToken) return;
     const skipPush = match === "same";
     if (skipPush) this.gcpStatus(`This image ${short} is already on Cloud Run. Applying the service settings.`, "working", live.url, "publish", short);
     else if (match === "other") this.gcpStatus(`Cloud Run is serving another image. Publishing ${short}.`, "working", "", "push", short);
-    else if (live.failed) this.gcpStatus("Could not read the image Cloud Run is serving. Continuing.", "working", "", "unknown", short);
+    else if (live.reason === "missing") this.gcpStatus(`Cloud Run has no service ${built.plan.service} yet. Deploy will create it.`, "working");
+    else if (live.reason === "auth") {
+      this.gcpStatus("Google Cloud CLI has no active account. Run gcloud auth login in a terminal, then deploy again.", "error");
+      return;
+    } else if (live.reason === "denied") {
+      this.gcpStatus(`This Google account cannot read Cloud Run in project ${built.plan.project}. Sign in with an account that has access, or choose another project.`, "error");
+      return;
+    } else if (live.failed) this.gcpStatus("Could not read the image Cloud Run is serving. Continuing.", "working", "", "unknown", short);
     if (!skipPush) {
     this.gcpStatus("Enabling Artifact Registry, Cloud Run, and Secret Manager.", "working");
     const enabled = await this.cli(root, "gcloud", ["services", "enable", "artifactregistry.googleapis.com", "run.googleapis.com", "secretmanager.googleapis.com", "--project", built.plan.project, "--quiet"], () => {}, 0, hide);
@@ -1199,17 +1249,20 @@ class Home implements vscode.WebviewViewProvider {
     } finally {
       clearInterval(pushTimer);
     }
+    if (token !== this.jobToken) return;
     if (pushed !== 0) {
       this.gcpStatus("The image did not upload. Check the Google account and the project.", "error");
       return;
     }
     }
     await this.allowSecretRead(root, built.plan.project, built.plan.secrets);
+    if (token !== this.jobToken) return;
     this.gcpStatus("Publishing the Cloud Run service.", "working", "", "publish");
     let output = "";
     const deployed = await this.cli(root, "gcloud", cloudRunArgs(built.plan), (text) => {
       output += text;
     }, 0, hide);
+    if (token !== this.jobToken) return;
     if (deployed !== 0) {
       const reason = commandFailure(hide(output));
       if (reason && !this.ship.logs.includes(reason.slice(0, 80))) this.showConsole(reason);
@@ -1220,25 +1273,32 @@ class Home implements vscode.WebviewViewProvider {
     if (url) writeGcpLink(root, { ...link, url });
     this.publishGcpFace(root, imageId || "");
     this.gcpStatus(url ? `Cloud Run is up to date with image ${short}. Live at ${url}.` : `Cloud Run is up to date with image ${short}.`, "ok", url, "current", short);
+    if (token === this.jobToken) {
+      this.jobOpen = false;
+      this.jobChild = undefined;
+    }
   }
 
-  private async liveRevision(root: string, projectId: string, region: string, service: string): Promise<{ image: string; url: string; missing: boolean; failed: boolean }> {
+  private async liveRevision(root: string, projectId: string, region: string, service: string): Promise<{ image: string; url: string; missing: boolean; failed: boolean; reason: "ok" | import("./project").DescribeFailure }> {
     let raw = "";
     const code = await this.cli(root, "gcloud", ["run", "services", "describe", service, "--project", projectId, "--region", region, "--format", "json(status.url,status.traffic,status.latestReadyRevisionName,status.latestCreatedRevisionName,spec.template.spec.containers[0].image)"], (text) => {
       raw += text;
     }, 30000);
-    if (code !== 0) return { image: "", url: "", missing: serviceMissing(raw), failed: !serviceMissing(raw) };
+    if (code !== 0) {
+      const reason = cloudRunDescribeFailure(raw);
+      return { image: "", url: "", missing: reason === "missing", failed: reason !== "missing", reason };
+    }
     const release = parseServiceRelease(raw);
-    if (!release) return { image: "", url: "", missing: false, failed: true };
-    if (!release.revision) return { image: "", url: release.url, missing: true, failed: false };
+    if (!release) return { image: "", url: "", missing: false, failed: true, reason: "failed" };
+    if (!release.revision) return { image: "", url: release.url, missing: true, failed: false, reason: "missing" };
     const tagged = releasedImage(release);
-    if (tagged) return { image: tagged, url: release.url, missing: false, failed: false };
+    if (tagged) return { image: tagged, url: release.url, missing: false, failed: false, reason: "ok" };
     let image = "";
     const rev = await this.cli(root, "gcloud", ["run", "revisions", "describe", release.revision, "--project", projectId, "--region", region, "--format", "value(spec.containers[0].image)"], (text) => {
       image += text;
     }, 30000);
-    if (rev !== 0) return { image: "", url: release.url, missing: false, failed: true };
-    return { image: image.trim(), url: release.url, missing: false, failed: false };
+    if (rev !== 0) return { image: "", url: release.url, missing: false, failed: true, reason: "failed" };
+    return { image: image.trim(), url: release.url, missing: false, failed: false, reason: "ok" };
   }
 
   private async matchServing(root: string, projectId: string, region: string, service: string, imageId: string, remoteImage: string): Promise<"same" | "other" | "unknown"> {
@@ -1264,10 +1324,23 @@ class Home implements vscode.WebviewViewProvider {
       return;
     }
     const short = shortImage(imageId);
-    const live = await this.liveRevision(root, link.project, link.region, imageName(loadProject(root).name));
+    const service = imageName(loadProject(root).name);
+    const live = await this.liveRevision(root, link.project, link.region, service);
     this.publishGcpFace(root, imageId);
+    if (live.reason === "missing" || live.missing) {
+      this.gcpStatus(`Cloud Run has no service ${service} in project ${link.project}, region ${link.region}. It was deleted or never published. Deploy creates it. This is not a Google sign-in error.`, "error", "", "unknown", short);
+      return;
+    }
+    if (live.reason === "auth") {
+      this.gcpStatus("Google Cloud CLI has no active account. Run gcloud auth login in a terminal, then refresh.", "error");
+      return;
+    }
+    if (live.reason === "denied") {
+      this.gcpStatus(`This Google account cannot read Cloud Run in project ${link.project}. Sign in with an account that has access, or choose another project.`, "error");
+      return;
+    }
     if (live.failed) {
-      this.gcpStatus("Could not read the image Cloud Run is serving.", "error", "", "unknown", short);
+      this.gcpStatus("Could not read the image Cloud Run is serving. The gcloud error is in the log below.", "error", "", "unknown", short);
       return;
     }
     if (live.missing || !live.image) {
@@ -1281,17 +1354,18 @@ class Home implements vscode.WebviewViewProvider {
     else this.gcpStatus("Could not read the image Cloud Run is serving.", "error", live.url, "unknown", short);
   }
 
-  private async readServiceLogs(root: string, projectId: string, region: string): Promise<void> {
+  private async readServiceLogs(root: string, projectId: string, region: string, freshness = "6h"): Promise<void> {
     const service = imageName(loadProject(root).name);
     const place = region || "us-central1";
+    const window = /^\d+[mhd]$/.test(freshness) ? freshness : "6h";
     this.gcpStatus("Reading the Cloud Run log.", "working");
     let raw = "";
     const code = await this.cli(root, "gcloud", [
       "logging", "read",
       monitorFilter(service, place),
       "--project", projectId,
-      "--limit", "80",
-      "--freshness", "6h",
+      "--limit", "400",
+      "--freshness", window,
       "--order", "desc",
       "--format", "json",
     ], (text) => { raw += text; }, 45000, () => "");
@@ -1314,6 +1388,7 @@ class Home implements vscode.WebviewViewProvider {
       turn: say(signal.turn),
       advice: say(signal.advice),
       bars,
+      stages: interactionStages(entries),
       measure,
       facts,
     });
@@ -1687,13 +1762,23 @@ class Home implements vscode.WebviewViewProvider {
       }
       if (message.type === "gcp-logs" && root && isProject(root)) {
         await writeUi(this.context, { ...ui, shipTarget: "gcp" });
-        await this.readServiceLogs(root, String(message.project || ""), String(message.region || ""));
+        await this.readServiceLogs(root, String(message.project || ""), String(message.region || ""), monitorFreshness(String(message.range || ""), Number(message.from) || 0));
+        return;
+      }
+      if (message.type === "gcp-stop") {
+        this.cancelJob();
+        this.gcpStatus("Stopped. Nothing new was published. Deploy starts again from the beginning.", "ok");
         return;
       }
       if (message.type === "gcp-build" && root && isProject(root)) {
         await writeUi(this.context, { ...ui, shipTarget: "gcp" });
+        const token = this.beginJob();
         this.gcpStatus("Building the local image. The log shows each step.", "working");
         await this.compose(root, ["compose", "up", "--build", "-d", "--force-recreate"], "building");
+        if (token !== this.jobToken) return;
+        this.jobOpen = false;
+        this.jobChild = undefined;
+        this.gcpStatus(this.ship.failed ? "The build stopped. Read the log." : "The local image was built.", this.ship.failed ? "error" : "ok");
         return;
       }
       if ((message.type === "gcp-check" || message.type === "gcp-deploy" || message.type === "gcp-live") && root && isProject(root)) {
@@ -1707,6 +1792,7 @@ class Home implements vscode.WebviewViewProvider {
           concurrency: message.concurrency,
           cpu: message.cpu,
           memory: message.memory,
+          cpuAlways: message.cpuAlways,
           timeout: message.timeout,
           env: Array.isArray(message.env) ? message.env : [],
         });
@@ -1818,7 +1904,7 @@ class Home implements vscode.WebviewViewProvider {
       if (message.type === "ship") {
         if (message.task === "refresh") {
           this.shipGen += 1;
-          this.shipProc?.kill();
+          this.killTree(this.shipProc);
           this.ship = { ...this.ship, phase: "idle" };
           await this.refreshShip(root);
         }

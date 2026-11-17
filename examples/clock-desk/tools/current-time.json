@@ -1,0 +1,14 @@
+{
+  "description": "Read the current time in one IANA timezone from the public clock.",
+  "calls": "mcp:clock:get_current_time",
+  "effect": "read",
+  "execution": "server",
+  "parameters": [
+    {
+      "name": "timezone",
+      "type": "string",
+      "required": true,
+      "description": "IANA timezone, for example America/Bogota."
+    }
+  ]
+}
